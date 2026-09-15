@@ -1,0 +1,42 @@
+[package]
+name = "llm-dialect"
+description = "Pure sans-I/O LLM dialect translation: Anthropic Messages / OpenAI Chat / OpenAI Responses wire formats ↔ a canonical model, plus SSE framer state machines. No runtime, no I/O, no wall clock."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+keywords = ["llm", "openai", "anthropic", "sse", "translate"]
+categories = ["web-programming", "network-programming", "parsing"]
+
+
+[lib]
+name = "llm_dialect"
+path = "src/lib.rs"
+
+[features]
+# SSE pump + per-dialect stream `Response` shells. Off by default so router-less
+# consumers (e.g. an Anthropic /v1/messages front-end over a chat/completions
+# engine) get the pure mapping without an HTTP framework dependency.
+default = []
+axum = ["dep:axum"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+futures = "0.3"
+tracing = "0.1"
+eventsource-stream = "0.2"
+axum = { version = "0.8", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "plotters"] }
+hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[[bench]]
+name = "framer"
+path = "benches/framer.rs"
+harness = false
