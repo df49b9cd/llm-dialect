@@ -4,7 +4,7 @@ description = "Pure sans-I/O LLM dialect translation: Anthropic Messages / OpenA
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 keywords = ["llm", "openai", "anthropic", "sse", "translate"]
 categories = ["web-programming", "network-programming", "parsing"]
 
