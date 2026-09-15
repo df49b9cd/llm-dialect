@@ -1,33 +1,24 @@
 # Publishing to crates.io
 
-Publishing is fully automated via [publish.yml](workflows/publish.yml), which runs on
-version tags and publishes to crates.io using
+Publishing is automated via [publish.yml](workflows/publish.yml), which runs on
+version tags and publishes to crates.io via
 [Trusted Publishing](https://crates.io/docs/trusted-publishing) (OIDC, no stored API
 tokens).
 
-## One-time setup on crates.io
+## Trusted-publishing registration (one-time, done)
 
-The crate `llm-dialect` does not exist yet on crates.io, so the first publish must be
-manual; trusted publishing is then attached to the released crate.
+The crate page → **Settings → Trusted Publishing → Add trusted publisher**:
 
-1.  Authenticate locally:
+| Field              | Value          |
+| ------------------ | -------------- |
+| Repository owner   | `df49b9cd`     |
+| Repository name    | `llm-dialect`  |
+| Workflow filename  | `publish.yml`  |
+| Environment        | *(leave empty)*|
 
-        cargo login
-
-2.  Publish `0.1.0` from the commit tagged `v0.1.0` (verify everything first):
-
-        cargo publish --all-features --dry-run
-        cargo publish --all-features
-
-3.  Open https://crates.io/crates/llm-dialect/settings → **Trusted Publishing** →
-    **Add trusted publisher** and enter:
-
-    | Field              | Value          |
-    | ------------------ | -------------- |
-    | Repository owner   | `df49b9cd`     |
-    | Repository name    | `llm-dialect`  |
-    | Workflow filename  | `publish.yml`  |
-    | Environment        | *(leave empty)*|
+`v0.1.0` predates this registration (it was published manually with `cargo login` +
+`cargo publish`), so its tag-push run fails the OIDC exchange at
+`rust-lang/crates-io-auth-action`. From `v0.1.1` on, tagging is sufficient.
 
 ## Releasing a new version
 
@@ -35,9 +26,9 @@ manual; trusted publishing is then attached to the released crate.
     sync) and merge to `master`.
 2.  Tag the merge commit and push:
 
-        git tag v0.2.0 && git push origin v0.2.0
+        git tag v0.1.1 && git push origin v0.1.1
 
 3.  The **publish** workflow runs: full CI checks (`cargo check` across versions and
-    feature sets, tests, doc tests), verifies the tag matches the manifest version, then
-    `cargo publish --all-features` via a short-lived OIDC token. The action revokes the
-    token when the job ends.
+    feature sets, tests, doc tests), verifies the tag matches the manifest version,
+    refuses to republish an existing version, then `cargo publish --all-features` via a
+    short-lived OIDC token. The action revokes the token when the job ends.
