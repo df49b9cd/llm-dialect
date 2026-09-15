@@ -1,5 +1,13 @@
 # llm-dialect
 
+[![ci](https://github.com/df49b9cd/llm-dialect/actions/workflows/ci.yml/badge.svg)](https://github.com/df49b9cd/llm-dialect/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/llm-dialect.svg)](https://crates.io/crates/llm-dialect)
+[![docs.rs](https://docs.rs/llm-dialect/badge.svg)](https://docs.rs/llm-dialect)
+
+```toml
+llm-dialect = "0.1" # MSRV 1.88
+```
+
 Pure sans-I/O LLM dialect translation: Anthropic Messages, OpenAI Chat
 Completions, and OpenAI Responses wire formats ↔ a canonical request/response
 model, plus SSE framer state machines for streamed turns. No async runtime, no
