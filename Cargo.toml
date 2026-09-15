@@ -3,10 +3,15 @@ name = "llm-dialect"
 description = "Pure sans-I/O LLM dialect translation: Anthropic Messages / OpenAI Chat / OpenAI Responses wire formats ↔ a canonical model, plus SSE framer state machines. No runtime, no I/O, no wall clock."
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88" # let-chains
 license = "MIT"
 keywords = ["llm", "openai", "anthropic", "sse", "translate"]
 categories = ["web-programming", "network-programming", "parsing"]
+repository = "https://github.com/df49b9cd/llm-dialect"
+homepage = "https://github.com/df49b9cd/llm-dialect"
+documentation = "https://docs.rs/llm-dialect"
+readme = "README.md"
+publish = true
 
 
 [lib]

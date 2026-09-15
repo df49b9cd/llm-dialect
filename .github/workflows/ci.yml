@@ -9,30 +9,36 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust:
+  check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `check` with no features covers the default (sse/streaming-disabled) set.
+          # Starting the nightly job trains the pipeline ahead of a future edition bump.
+          - { toolchain: stable, name: check }
+          - { toolchain: stable, name: check, features: --all-features }
+          - { toolchain: "1.88", name: check, features: --all-features } # MSRV
+          - { toolchain: nightly, name: check, features: --all-features }
+          # benches gate (criterion is a dev-dep only; benches/framer.rs builds in
+          # workspace context, bolted to [dev-dependencies] in Cargo.toml)
+          - { toolchain: stable, name: check, features: --benches }
+          - { toolchain: stable, name: fmt }
+          - { toolchain: stable, name: clippy, features: --all-targets --all-features }
+          - { toolchain: stable, name: test }
+          - { toolchain: stable, name: test, features: --all-features }
+          - { toolchain: stable, name: test, features: --doc --all-features }
     steps:
       - uses: actions/checkout@v7
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: clippy, rustfmt
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Format check
-        run: cargo fmt --check
-
-      - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Tests (default features)
-        run: cargo test --workspace
-
-      - name: Tests (axum feature)
-        run: cargo test --workspace --all-features
-
-      - name: Doc tests
-        run: cargo test --doc --all-features
+      - uses: Swatinem/rust-cache@v2.9.2
+      - name: ${{ matrix.name }} (${{ matrix.toolchain }} ${{ matrix.features }})
+        run: |
+          cargo ${{ matrix.name }} ${{ matrix.features }} \
+            $([ '${{ matrix.name }}' = clippy ] && echo -- -D warnings) \
+            $([ '${{ matrix.name }}' = fmt ] && echo -- --check)
