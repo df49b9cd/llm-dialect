@@ -69,7 +69,7 @@ fn anthropic_turn_chunks() -> Vec<CanonChunk> {
 }
 
 /// Frame one full turn through the Anthropic framer state machine.
-fn frame_anthropic_turn(chunks: &[CanonChunk]) -> Vec<(String, String)> {
+fn frame_anthropic_turn(chunks: &[CanonChunk]) -> Vec<(&str, String)> {
     let mut st = StreamState::new();
     let mut out = Vec::new();
     for c in chunks {

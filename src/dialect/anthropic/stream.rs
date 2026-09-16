@@ -187,9 +187,9 @@ impl TerminalUsage {
 /// `Value`-tree allocation per streamed token; dynamic leaves still escape
 /// through serde, keeping the wire bytes identical to the `json!` original
 /// this replaced.
-fn block_delta(idx: usize, delta_json: String) -> (String, String) {
+fn block_delta(idx: usize, delta_json: String) -> (&'static str, String) {
     (
-        "content_block_delta".into(),
+        "content_block_delta",
         format!("{{\"delta\":{delta_json},\"index\":{idx},\"type\":\"content_block_delta\"}}"),
     )
 }
@@ -197,25 +197,25 @@ fn block_delta(idx: usize, delta_json: String) -> (String, String) {
 /// Text-delta frame pair in one pass: the delta object and its wrapper share
 /// one buffer, the text escaping straight into it (one allocation where the
 /// `block_delta` path above spends three: delta json, wrapper, event name).
-fn text_delta(idx: usize, text: &str) -> (String, String) {
+fn text_delta(idx: usize, text: &str) -> (&'static str, String) {
     let mut data = String::with_capacity(64 + text.len());
     data.push_str("{\"delta\":{\"text\":");
     write_json_str(&mut data, text);
     data.push_str(",\"type\":\"text_delta\"},\"index\":");
     data.push_str(&idx.to_string());
     data.push_str(",\"type\":\"content_block_delta\"}");
-    ("content_block_delta".into(), data)
+    ("content_block_delta", data)
 }
 
 /// `content_block_stop` frame pair (same hand-assembly rationale).
-fn block_stop(idx: usize) -> (String, String) {
+fn block_stop(idx: usize) -> (&'static str, String) {
     (
-        "content_block_stop".into(),
+        "content_block_stop",
         format!("{{\"index\":{idx},\"type\":\"content_block_stop\"}}"),
     )
 }
 
-fn open_block(out: &mut Vec<(String, String)>, state: &mut StreamState, idx: usize, block: &str) {
+fn open_block(out: &mut Vec<(&'static str, String)>, state: &mut StreamState, idx: usize, block: &str) {
     flush_stop_tail(out, state);
     // close everything below idx that is still open — SSE blocks are sequential
     for i in 0..idx {
@@ -229,14 +229,14 @@ fn open_block(out: &mut Vec<(String, String)>, state: &mut StreamState, idx: usi
     }
     state.blocks[idx] = true;
     out.push((
-        "content_block_start".into(),
+        "content_block_start",
         format!("{{\"content_block\":{block},\"index\":{idx},\"type\":\"content_block_start\"}}"),
     ));
 }
 
 /// Emit any text withheld by the stop window into its own block, before that
 /// block is closed. No-op on the common (no stop sequences) path.
-fn flush_stop_tail(out: &mut Vec<(String, String)>, state: &mut StreamState) {
+fn flush_stop_tail(out: &mut Vec<(&'static str, String)>, state: &mut StreamState) {
     let Some((idx, kind, text)) = state.stop_window.as_mut().and_then(StopWindow::take_tail) else {
         return;
     };
@@ -254,7 +254,7 @@ fn flush_stop_tail(out: &mut Vec<(String, String)>, state: &mut StreamState) {
     out.push(block_delta(idx, delta));
 }
 
-fn close_block(out: &mut Vec<(String, String)>, state: &mut StreamState, upto: usize) {
+fn close_block(out: &mut Vec<(&'static str, String)>, state: &mut StreamState, upto: usize) {
     flush_stop_tail(out, state);
     for (i, open) in state.blocks.iter_mut().enumerate().take(upto) {
         if *open {
@@ -291,7 +291,7 @@ fn terminal_usage_json(input: u64, output: u64, cached_read: u64, cache_write: u
 /// and usage. Shared by the trailer, finish, and finalizer paths so the
 /// exactly-one-terminal-frame invariant lives in one place.
 fn emit_terminal(
-    out: &mut Vec<(String, String)>,
+    out: &mut Vec<(&'static str, String)>,
     state: &mut StreamState,
     stop_reason: String,
     usage: TerminalUsage,
@@ -307,7 +307,7 @@ fn emit_terminal(
         None => (stop_reason, "null".to_string()),
     };
     out.push((
-        "message_delta".into(),
+        "message_delta",
         format!(
             "{{\"delta\":{{\"stop_reason\":{},\"stop_sequence\":{stop_sequence}}},\"type\":\"message_delta\",\"usage\":{}}}",
             json_str(&stop_reason),
@@ -315,8 +315,8 @@ fn emit_terminal(
         ),
     ));
     out.push((
-        "message_stop".into(),
-        "{\"type\":\"message_stop\"}".into(),
+        "message_stop",
+        "{\"type\":\"message_stop\"}".to_string(),
     ));
     state.message_stopped = true;
 }
@@ -332,7 +332,7 @@ pub fn chunk_to_sse_events(
     model: &str,
     state: &mut StreamState,
     msg_id: &str,
-) -> Vec<(String, String)> {
+) -> Vec<(&'static str, String)> {
     if state.message_stopped {
         return Vec::new();
     }
@@ -349,7 +349,7 @@ pub fn chunk_to_sse_events(
     if state.first {
         state.first = false;
         out.push((
-            "message_start".into(),
+            "message_start",
             format!(
                 "{{\"message\":{{\"content\":[],\"id\":{},\"model\":{},\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{{\"input_tokens\":{},\"output_tokens\":0}}}},\"type\":\"message_start\"}}",
                 json_str(msg_id),
@@ -581,7 +581,7 @@ pub(super) fn map_stop_reason_outbound(fr: &str) -> &str {
 /// Terminal frames for a stream that ended without a finish chunk (provider
 /// truncated, client-visible end closer). Mirrors the OpenAI surface's
 /// guaranteed `[DONE]`. No-op when the message already stopped.
-pub fn finalize_stream(state: &mut StreamState) -> Vec<(String, String)> {
+pub fn finalize_stream(state: &mut StreamState) -> Vec<(&'static str, String)> {
     if state.message_stopped {
         return Vec::new();
     }
@@ -786,7 +786,7 @@ mod tests {
 
     /// Run typed canonical chunks through the framer, return all frame pairs
     /// including the finalizer's.
-    fn frames(chunks: Vec<CanonChunk>) -> Vec<(String, String)> {
+    fn frames(chunks: Vec<CanonChunk>) -> Vec<(&'static str, String)> {
         let mut st = StreamState::new();
         let mut all = Vec::new();
         for c in &chunks {
@@ -796,18 +796,18 @@ mod tests {
         all
     }
 
-    fn types(all: &[(String, String)]) -> Vec<&str> {
+    fn types(all: &[(&'static str, String)]) -> Vec<&str> {
         all.iter().map(|(e, _)| e.as_str()).collect()
     }
 
-    fn data_of<'a>(all: &'a [(String, String)], ev: &str) -> Vec<&'a str> {
+    fn data_of<'a>(all: &'a [(&'static str, String)], ev: &str) -> Vec<&'a str> {
         all.iter()
             .filter(|(e, _)| e == ev)
             .map(|(_, d)| d.as_str())
             .collect()
     }
 
-    fn starts_indices(all: &[(String, String)]) -> Vec<i64> {
+    fn starts_indices(all: &[(&'static str, String)]) -> Vec<i64> {
         data_of(all, "content_block_start")
             .iter()
             .filter_map(|d| serde_json::from_str::<serde_json::Value>(d).unwrap()["index"].as_i64())
@@ -1044,7 +1044,7 @@ mod tests {
         // chunk with no finish is a trailer, not a terminator, unless a finish
         // chunk already stashed a stop reason.
         let mut st = StreamState::new();
-        let mut all: Vec<(String, String)> = Vec::new();
+        let mut all: Vec<(&'static str, String)> = Vec::new();
         for _ in 0..2 {
             all.extend(chunk_to_sse_events(
                 &CanonChunk {
@@ -1233,7 +1233,7 @@ mod tests {
                 ..text("")
             },
         ];
-        let mut all: Vec<(String, String)> = Vec::new();
+        let mut all: Vec<(&'static str, String)> = Vec::new();
         for c in chunks {
             all.extend(chunk_to_sse_events(&c, "m", &mut st, "msg_1"));
         }
@@ -1343,7 +1343,7 @@ mod tests {
         assert_eq!(data_of(&all, "message_stop").len(), 1);
     }
 
-    fn show(all: &[(String, String)]) -> String {
+    fn show(all: &[(&'static str, String)]) -> String {
         all.iter()
             .map(|(e, d)| format!("event: {e}\ndata: {d}"))
             .collect::<Vec<_>>()
