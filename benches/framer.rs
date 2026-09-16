@@ -161,10 +161,16 @@ fn bench_framer(_c: &mut Criterion) {
     // Canary: the empty-chunk early-out in to_sse_json — a guard on the
     // no-work fast path. Excluded from the geomean by the scorer (canary_*
     // naming); a regression here rejects the candidate outright.
+    // Loops 1000 calls per iteration: a single ~6ns call is smaller than
+    // cross-build code-layout jitter (~±4%), which made the canary a
+    // build coin-flip at exactly the band edge (AVO r2/r5 lesson); a
+    // real early-out regression still moves the amortized number +100%.
     group.bench_function("canary_empty_chunk_skip", |b| {
         b.iter(|| {
             let chunk = CanonChunk::default();
-            black_box(chunk.to_sse_json("chatcmpl-bench", "m", 0, false).is_none())
+            for _ in 0..1000 {
+                black_box(chunk.to_sse_json("chatcmpl-bench", "m", 0, false).is_none())
+            }
         })
     });
 
