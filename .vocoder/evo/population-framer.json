@@ -21,5 +21,24 @@
 "gate": "pass (82 tests, clippy 0)",
 "note": "baseline @ 0e8c44f on 32-core Linux, rustc 1.98.0; cargo bench then evo-score.sh"
 },
-"committed": []
+"committed": [
+{
+"name": "x1",
+"commit": "dc9da26",
+"phase": "perf",
+"scores": {
+"bench_geomean_ns": 26914.23,
+"framer/anthropic_text_delta": 15235.241,
+"framer/anthropic_turn_full": 22716.173,
+"framer/openai_chat_to_sse_json": 21076.825,
+"framer/openai_chat_tool_delta": 71934.652,
+"canary_empty_chunk_skip_ns": 5.779,
+"test_count": 82
+},
+"gate": "pass (82 tests, clippy 0)",
+"note": "round r1-framer · hand-assembled SSE frames (alloc elision): json! Value trees -> format! strings, byte-identical wire (verified vs frame dump)",
+"noise_band": 6.33,
+"scorer_sha": ""
+}
+]
 }
