@@ -9,7 +9,7 @@
 //! driver (`dialect::sse`), and this file's `anthropic_stream_response` is
 //! the thin axum shell wiring state machine to pump.
 
-use crate::canonical::{json_str, CanonChunk, Usage};
+use crate::canonical::{json_str, write_json_str, CanonChunk, Usage};
 #[cfg(feature = "axum")]
 use crate::error::ProxyError;
 #[cfg(feature = "axum")]
@@ -185,13 +185,26 @@ impl TerminalUsage {
 /// `content_block_delta` frame pair — the hot per-token shape. Hand-assembled
 /// with keys in serde's BTreeMap (alphabetical) order so the framer skips a
 /// `Value`-tree allocation per streamed token; dynamic leaves still escape
-/// through `json_str`, keeping the wire bytes identical to the `json!`
-/// original this replaced.
+/// through serde, keeping the wire bytes identical to the `json!` original
+/// this replaced.
 fn block_delta(idx: usize, delta_json: String) -> (String, String) {
     (
         "content_block_delta".into(),
         format!("{{\"delta\":{delta_json},\"index\":{idx},\"type\":\"content_block_delta\"}}"),
     )
+}
+
+/// Text-delta frame pair in one pass: the delta object and its wrapper share
+/// one buffer, the text escaping straight into it (one allocation where the
+/// `block_delta` path above spends three: delta json, wrapper, event name).
+fn text_delta(idx: usize, text: &str) -> (String, String) {
+    let mut data = String::with_capacity(64 + text.len());
+    data.push_str("{\"delta\":{\"text\":");
+    write_json_str(&mut data, text);
+    data.push_str(",\"type\":\"text_delta\"},\"index\":");
+    data.push_str(&idx.to_string());
+    data.push_str(",\"type\":\"content_block_delta\"}");
+    ("content_block_delta".into(), data)
 }
 
 /// `content_block_stop` frame pair (same hand-assembly rationale).
@@ -429,15 +442,22 @@ pub fn chunk_to_sse_events(
                 i
             }
         };
-        let emit = match state.stop_window.as_mut() {
-            Some(w) => w.feed(idx, "text", &chunk.delta_text),
-            None => chunk.delta_text.clone(),
-        };
-        if !emit.is_empty() {
-            out.push(block_delta(
-                idx,
-                format!("{{\"text\":{},\"type\":\"text_delta\"}}", json_str(&emit)),
-            ));
+        if state.stop_window.is_some() {
+            let emit = state
+                .stop_window
+                .as_mut()
+                .map(|w| w.feed(idx, "text", &chunk.delta_text))
+                .unwrap_or_default();
+            if !emit.is_empty() {
+                out.push(block_delta(
+                    idx,
+                    format!("{{\"text\":{},\"type\":\"text_delta\"}}", json_str(&emit)),
+                ));
+            }
+        } else if !chunk.delta_text.is_empty() {
+            // common path: no stop window — frame straight from the chunk's
+            // own text, no clone (borrow reuse)
+            out.push(text_delta(idx, &chunk.delta_text));
         }
     }
     // Tool-call deltas: canonical streams them OpenAI-style. Each upstream
