@@ -9,7 +9,7 @@
 //! driver (`dialect::sse`), and this file's `anthropic_stream_response` is
 //! the thin axum shell wiring state machine to pump.
 
-use crate::canonical::{CanonChunk, Usage};
+use crate::canonical::{json_str, CanonChunk, Usage};
 #[cfg(feature = "axum")]
 use crate::error::ProxyError;
 #[cfg(feature = "axum")]
@@ -182,21 +182,33 @@ impl TerminalUsage {
     }
 }
 
-fn open_block(
-    out: &mut Vec<(String, String)>,
-    state: &mut StreamState,
-    idx: usize,
-    block: serde_json::Value,
-) {
+/// `content_block_delta` frame pair — the hot per-token shape. Hand-assembled
+/// with keys in serde's BTreeMap (alphabetical) order so the framer skips a
+/// `Value`-tree allocation per streamed token; dynamic leaves still escape
+/// through `json_str`, keeping the wire bytes identical to the `json!`
+/// original this replaced.
+fn block_delta(idx: usize, delta_json: String) -> (String, String) {
+    (
+        "content_block_delta".into(),
+        format!("{{\"delta\":{delta_json},\"index\":{idx},\"type\":\"content_block_delta\"}}"),
+    )
+}
+
+/// `content_block_stop` frame pair (same hand-assembly rationale).
+fn block_stop(idx: usize) -> (String, String) {
+    (
+        "content_block_stop".into(),
+        format!("{{\"index\":{idx},\"type\":\"content_block_stop\"}}"),
+    )
+}
+
+fn open_block(out: &mut Vec<(String, String)>, state: &mut StreamState, idx: usize, block: &str) {
     flush_stop_tail(out, state);
     // close everything below idx that is still open — SSE blocks are sequential
     for i in 0..idx {
         if i < state.blocks.len() && state.blocks[i] {
             state.blocks[i] = false;
-            out.push((
-                "content_block_stop".into(),
-                serde_json::json!({"type": "content_block_stop", "index": i}).to_string(),
-            ));
+            out.push(block_stop(i));
         }
     }
     if state.blocks.len() <= idx {
@@ -205,12 +217,7 @@ fn open_block(
     state.blocks[idx] = true;
     out.push((
         "content_block_start".into(),
-        serde_json::json!({
-            "type": "content_block_start",
-            "index": idx,
-            "content_block": block,
-        })
-        .to_string(),
+        format!("{{\"content_block\":{block},\"index\":{idx},\"type\":\"content_block_start\"}}"),
     ));
 }
 
@@ -224,19 +231,14 @@ fn flush_stop_tail(out: &mut Vec<(String, String)>, state: &mut StreamState) {
         return;
     }
     let delta = if kind == "thinking" {
-        serde_json::json!({"type": "thinking_delta", "thinking": text})
+        format!(
+            "{{\"thinking\":{},\"type\":\"thinking_delta\"}}",
+            json_str(&text)
+        )
     } else {
-        serde_json::json!({"type": "text_delta", "text": text})
+        format!("{{\"text\":{},\"type\":\"text_delta\"}}", json_str(&text))
     };
-    out.push((
-        "content_block_delta".into(),
-        serde_json::json!({
-            "type": "content_block_delta",
-            "index": idx,
-            "delta": delta,
-        })
-        .to_string(),
-    ));
+    out.push(block_delta(idx, delta));
 }
 
 fn close_block(out: &mut Vec<(String, String)>, state: &mut StreamState, upto: usize) {
@@ -244,10 +246,7 @@ fn close_block(out: &mut Vec<(String, String)>, state: &mut StreamState, upto: u
     for (i, open) in state.blocks.iter_mut().enumerate().take(upto) {
         if *open {
             *open = false;
-            out.push((
-                "content_block_stop".into(),
-                serde_json::json!({"type": "content_block_stop", "index": i}).to_string(),
-            ));
+            out.push(block_stop(i));
         }
     }
 }
@@ -262,22 +261,16 @@ fn next_index(state: &StreamState) -> usize {
 /// whenever known — for non-Anthropic upstreams the prompt count only ever
 /// arrives in the trailer, and this frame is the sole place it can surface.
 /// Cache counters ride along when present (clients bill on them).
-fn terminal_usage(
-    input: u64,
-    output: u64,
-    cached_read: u64,
-    cache_write: u64,
-) -> serde_json::Value {
-    let mut u = serde_json::json!({
-        "input_tokens": input,
-        "output_tokens": output,
-    });
-    if cached_read > 0 {
-        u["cache_read_input_tokens"] = serde_json::json!(cached_read);
-    }
+fn terminal_usage_json(input: u64, output: u64, cached_read: u64, cache_write: u64) -> String {
+    // keys in serde's alphabetical order: cache_creation < cache_read < input < output
+    let mut u = String::from("{");
     if cache_write > 0 {
-        u["cache_creation_input_tokens"] = serde_json::json!(cache_write);
+        u.push_str(&format!("\"cache_creation_input_tokens\":{cache_write},"));
     }
+    if cached_read > 0 {
+        u.push_str(&format!("\"cache_read_input_tokens\":{cached_read},"));
+    }
+    u.push_str(&format!("\"input_tokens\":{input},\"output_tokens\":{output}}}"));
     u
 }
 
@@ -297,24 +290,20 @@ fn emit_terminal(
     // from running out of things to say.
     let matched = state.stop_window.as_ref().and_then(|w| w.matched.clone());
     let (stop_reason, stop_sequence) = match matched {
-        Some(s) => ("stop_sequence".to_string(), serde_json::json!(s)),
-        None => (stop_reason, serde_json::Value::Null),
+        Some(s) => ("stop_sequence".to_string(), json_str(&s)),
+        None => (stop_reason, "null".to_string()),
     };
     out.push((
         "message_delta".into(),
-        serde_json::json!({
-            "type": "message_delta",
-            "delta": {
-                "stop_reason": stop_reason,
-                "stop_sequence": stop_sequence,
-            },
-            "usage": terminal_usage(prompt, usage.output, usage.cached_read, usage.cache_write),
-        })
-        .to_string(),
+        format!(
+            "{{\"delta\":{{\"stop_reason\":{},\"stop_sequence\":{stop_sequence}}},\"type\":\"message_delta\",\"usage\":{}}}",
+            json_str(&stop_reason),
+            terminal_usage_json(prompt, usage.output, usage.cached_read, usage.cache_write),
+        ),
     ));
     out.push((
         "message_stop".into(),
-        serde_json::json!({"type": "message_stop"}).to_string(),
+        "{\"type\":\"message_stop\"}".into(),
     ));
     state.message_stopped = true;
 }
@@ -348,20 +337,12 @@ pub fn chunk_to_sse_events(
         state.first = false;
         out.push((
             "message_start".into(),
-            serde_json::json!({
-                "type": "message_start",
-                "message": {
-                    "id": msg_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "model": model,
-                    "content": [],
-                    "stop_reason": null,
-                    "stop_sequence": null,
-                    "usage": {"input_tokens": state.input_tokens, "output_tokens": 0},
-                }
-            })
-            .to_string(),
+            format!(
+                "{{\"message\":{{\"content\":[],\"id\":{},\"model\":{},\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{{\"input_tokens\":{},\"output_tokens\":0}}}},\"type\":\"message_start\"}}",
+                json_str(msg_id),
+                json_str(model),
+                state.input_tokens,
+            ),
         ));
     }
 
@@ -404,41 +385,36 @@ pub fn chunk_to_sse_events(
             _ => {
                 let i = next_index(state);
                 state.thinking_index = Some(i);
-                open_block(
-                    &mut out,
-                    state,
-                    i,
-                    serde_json::json!({"type": "thinking", "thinking": ""}),
-                );
+                open_block(&mut out, state, i, "{\"thinking\":\"\",\"type\":\"thinking\"}");
                 i
             }
         };
         // Reasoning models apply stop sequences to the thinking channel too,
         // so it is filtered exactly like visible text. Signatures are opaque
         // and never scanned.
-        let delta_obj = match th.kind {
-            "signature" => {
-                Some(serde_json::json!({"type": "signature_delta", "signature": th.text}))
-            }
+        let delta_json = match th.kind {
+            "signature" => Some(format!(
+                "{{\"signature\":{},\"type\":\"signature_delta\"}}",
+                json_str(&th.text)
+            )),
             _ => match state.stop_window.as_mut() {
                 Some(w) => {
                     let emit = w.feed(idx, "thinking", &th.text);
-                    (!emit.is_empty())
-                        .then(|| serde_json::json!({"type": "thinking_delta", "thinking": emit}))
+                    (!emit.is_empty()).then(|| {
+                        format!(
+                            "{{\"thinking\":{},\"type\":\"thinking_delta\"}}",
+                            json_str(&emit)
+                        )
+                    })
                 }
-                None => Some(serde_json::json!({"type": "thinking_delta", "thinking": th.text})),
+                None => Some(format!(
+                    "{{\"thinking\":{},\"type\":\"thinking_delta\"}}",
+                    json_str(&th.text)
+                )),
             },
         };
-        if let Some(delta_obj) = delta_obj {
-            out.push((
-                "content_block_delta".into(),
-                serde_json::json!({
-                    "type": "content_block_delta",
-                    "index": idx,
-                    "delta": delta_obj,
-                })
-                .to_string(),
-            ));
+        if let Some(delta_json) = delta_json {
+            out.push(block_delta(idx, delta_json));
         }
     }
     if !chunk.delta_text.is_empty() {
@@ -449,12 +425,7 @@ pub fn chunk_to_sse_events(
             _ => {
                 let i = next_index(state);
                 state.text_index = Some(i);
-                open_block(
-                    &mut out,
-                    state,
-                    i,
-                    serde_json::json!({"type": "text", "text": ""}),
-                );
+                open_block(&mut out, state, i, "{\"text\":\"\",\"type\":\"text\"}");
                 i
             }
         };
@@ -463,14 +434,9 @@ pub fn chunk_to_sse_events(
             None => chunk.delta_text.clone(),
         };
         if !emit.is_empty() {
-            out.push((
-                "content_block_delta".into(),
-                serde_json::json!({
-                    "type": "content_block_delta",
-                    "index": idx,
-                    "delta": {"type": "text_delta", "text": emit},
-                })
-                .to_string(),
+            out.push(block_delta(
+                idx,
+                format!("{{\"text\":{},\"type\":\"text_delta\"}}", json_str(&emit)),
             ));
         }
     }
@@ -497,7 +463,11 @@ pub fn chunk_to_sse_events(
                     &mut out,
                     state,
                     idx,
-                    serde_json::json!({"type": "tool_use", "id": id, "name": name, "input": {}}),
+                    &format!(
+                        "{{\"id\":{},\"input\":{{}},\"name\":{},\"type\":\"tool_use\"}}",
+                        json_str(&id),
+                        json_str(name),
+                    ),
                 );
             }
             if let Some(args) = tc["function"]["arguments"].as_str()
@@ -514,14 +484,12 @@ pub fn chunk_to_sse_events(
                     );
                     continue;
                 }
-                out.push((
-                    "content_block_delta".into(),
-                    serde_json::json!({
-                        "type": "content_block_delta",
-                        "index": idx,
-                        "delta": {"type": "input_json_delta", "partial_json": args},
-                    })
-                    .to_string(),
+                out.push(block_delta(
+                    idx,
+                    format!(
+                        "{{\"partial_json\":{},\"type\":\"input_json_delta\"}}",
+                        json_str(args)
+                    ),
                 ));
             }
         }

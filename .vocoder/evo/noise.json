@@ -1,0 +1,71 @@
+{
+  "noise_floor_version": 1,
+  "calibrations": 2,
+  "metrics": {
+    "canary_empty_chunk_skip_ns": {
+      "runs": 3,
+      "mean_ns": 5.917,
+      "cv_pct": 0.21,
+      "range_pct": 1.2,
+      "stat_band_pct": 0.35,
+      "improve_band_pct": 3.0,
+      "samples_ns": [
+        5.915,
+        5.902,
+        5.933
+      ]
+    },
+    "framer/anthropic_text_delta": {
+      "runs": 3,
+      "mean_ns": 68938.071,
+      "cv_pct": 1.33,
+      "range_pct": 3.12,
+      "stat_band_pct": 2.18,
+      "improve_band_pct": 3.9,
+      "samples_ns": [
+        70207.66,
+        68057.34,
+        68549.213
+      ]
+    },
+    "framer/anthropic_turn_full": {
+      "runs": 3,
+      "mean_ns": 93716.958,
+      "cv_pct": 0.41,
+      "range_pct": 2.22,
+      "stat_band_pct": 0.68,
+      "improve_band_pct": 3.0,
+      "samples_ns": [
+        93996.446,
+        93167.694,
+        93986.735
+      ]
+    },
+    "framer/openai_chat_to_sse_json": {
+      "runs": 3,
+      "mean_ns": 113999.159,
+      "cv_pct": 2.1,
+      "range_pct": 5.06,
+      "stat_band_pct": 3.43,
+      "improve_band_pct": 6.33,
+      "samples_ns": [
+        116577.277,
+        110804.235,
+        114615.967
+      ]
+    },
+    "framer/openai_chat_tool_delta": {
+      "runs": 3,
+      "mean_ns": 217872.61,
+      "cv_pct": 1.54,
+      "range_pct": 3.69,
+      "stat_band_pct": 2.52,
+      "improve_band_pct": 4.61,
+      "samples_ns": [
+        222624.488,
+        215528.924,
+        215464.419
+      ]
+    }
+  }
+}

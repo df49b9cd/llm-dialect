@@ -45,6 +45,14 @@ pub fn join_text_parts(parts: &[serde_json::Value]) -> String {
         .join("")
 }
 
+/// The JSON encoding of a string leaf — quotes and escapes exactly as
+/// serde_json emits them — so hand-assembled frames stay byte-identical to
+/// the `Value`-tree output they replaced (keys ride in serde's BTreeMap
+/// order; dynamic leaves still escape through serde itself).
+pub(crate) fn json_str(s: &str) -> String {
+    serde_json::to_string(s).expect("string JSON encoding is infallible")
+}
+
 /// `ChatRequest::extra` key meaning "the trailing assistant turn is a prefill
 /// the model must continue, not a finished turn". Set by the items deflater,
 /// consumed and removed by the provider senders — it names an intent the
@@ -215,17 +223,16 @@ impl CanonChunk {
     ) -> Option<String> {
         if include_usage {
             let u = self.usage.as_ref()?;
-            return Some(
-                serde_json::json!({
-                    "id": id, "object": "chat.completion.chunk", "created": created,
-                    "model": model, "choices": [],
-                    "usage": {"prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens,
-                              "total_tokens": u.prompt_tokens + u.completion_tokens,
-                              "cached_read_tokens": u.cached_read_tokens,
-                              "cache_write_tokens": u.cache_write_tokens}
-                })
-                .to_string(),
-            );
+            return Some(format!(
+                "{{\"choices\":[],\"created\":{created},\"id\":{},\"model\":{},\"object\":\"chat.completion.chunk\",\"usage\":{{\"cache_write_tokens\":{},\"cached_read_tokens\":{},\"completion_tokens\":{},\"prompt_tokens\":{},\"total_tokens\":{}}}}}",
+                json_str(id),
+                json_str(model),
+                u.cache_write_tokens,
+                u.cached_read_tokens,
+                u.completion_tokens,
+                u.prompt_tokens,
+                u.prompt_tokens + u.completion_tokens,
+            ));
         }
         if self.delta_text.is_empty()
             && self.tool_calls.is_none()
@@ -236,27 +243,39 @@ impl CanonChunk {
         }
         // omit `content` entirely on tool-call-only deltas — a literal "" confuses
         // strict merge-by-index clients
-        let mut delta = serde_json::json!({});
+        let mut delta = String::new();
         if !self.delta_text.is_empty() {
-            delta["content"] = serde_json::json!(self.delta_text);
-        }
-        if let Some(tcs) = &self.tool_calls {
-            delta["tool_calls"] = tcs.clone();
+            delta.push_str("\"content\":");
+            delta.push_str(&json_str(&self.delta_text));
         }
         if let Some(th) = &self.thinking {
-            delta["thinking"] = serde_json::json!({
-                "block_index": th.block_index,
-                "kind": th.kind,
-                "text": th.text,
-            });
+            if !delta.is_empty() {
+                delta.push(',');
+            }
+            delta.push_str(&format!(
+                "\"thinking\":{{\"block_index\":{},\"kind\":{},\"text\":{}}}",
+                th.block_index,
+                json_str(th.kind),
+                json_str(&th.text),
+            ));
         }
-        Some(
-            serde_json::json!({
-                "id": id, "object": "chat.completion.chunk", "created": created,
-                "model": model,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": self.finish_reason}]
-            })
-            .to_string(),
-        )
+        if let Some(tcs) = &self.tool_calls {
+            if !delta.is_empty() {
+                delta.push(',');
+            }
+            delta.push_str("\"tool_calls\":");
+            // a Value serializes to the identical bytes it contributed inside
+            // the parent tree — embed it without the deep clone
+            delta.push_str(&tcs.to_string());
+        }
+        let finish_reason = match &self.finish_reason {
+            Some(fr) => json_str(fr),
+            None => "null".to_string(),
+        };
+        Some(format!(
+            "{{\"choices\":[{{\"delta\":{{{delta}}},\"finish_reason\":{finish_reason},\"index\":0}}],\"created\":{created},\"id\":{},\"model\":{},\"object\":\"chat.completion.chunk\"}}",
+            json_str(id),
+            json_str(model),
+        ))
     }
 }
