@@ -1,0 +1,17 @@
+{
+"schema": "avo-population/v1",
+"lineage": "framer",
+"scoring": {
+"gate": "see docs/EVO.md — the correctness gate for this repo's toolchain",
+"f": "see docs/EVO.md — scope picks its primary score"
+},
+"x0": {
+"name": "x0",
+"commit": "0e8c44f",
+"phase": "baseline",
+"scores": {},
+"gate": "pending",
+"note": "seeded by evo-init --scope framer"
+},
+"committed": []
+}
