@@ -1,11 +1,17 @@
 # llm-dialect
 
 [![ci](https://github.com/df49b9cd/llm-dialect/actions/workflows/ci.yml/badge.svg)](https://github.com/df49b9cd/llm-dialect/actions/workflows/ci.yml)
+[![publish](https://github.com/df49b9cd/llm-dialect/actions/workflows/publish.yml/badge.svg)](https://github.com/df49b9cd/llm-dialect/actions/workflows/publish.yml)
 [![crates.io](https://img.shields.io/crates/v/llm-dialect.svg)](https://crates.io/crates/llm-dialect)
 [![docs.rs](https://docs.rs/llm-dialect/badge.svg)](https://docs.rs/llm-dialect)
+[![rust version](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
+[![license](https://img.shields.io/crates/l/llm-dialect.svg)](./LICENSE-MIT)
+[![dependency status](https://deps.rs/crate/llm-dialect/0.1.1/status.svg)](https://deps.rs/crate/llm-dialect/0.1.1)
+[![crates.io downloads](https://img.shields.io/crates/d/llm-dialect.svg)](https://crates.io/crates/llm-dialect)
+[![GitHub stars](https://img.shields.io/github/stars/df49b9cd/llm-dialect.svg)](https://github.com/df49b9cd/llm-dialect/stargazers)
 
 ```toml
-llm-dialect = "0.1" # MSRV 1.88
+llm-dialect = "0.1.1" # MSRV 1.88
 ```
 
 Pure sans-I/O LLM dialect translation: Anthropic Messages, OpenAI Chat
@@ -64,6 +70,10 @@ if you're already an axum service and want drop-in handlers.
 | `dialect::deflate` | `ItemRequest` → `ChatRequest` |
 | `dialect::sse` *(feature `axum`)* | the pump that drives a framer over a stream |
 | `error` | the shared `ProxyError` and its HTTP error envelope |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the module dataflow, the purity
+boundary and how it's enforced, and the cross-dialect invariants (usage
+arithmetic, thinking, tool-call linkage, streaming terminal frames).
 
 ## Guarantees the crate holds
 
