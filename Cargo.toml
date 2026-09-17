@@ -50,3 +50,8 @@ harness = false
 name = "req"
 path = "benches/req.rs"
 harness = false
+
+[[bench]]
+name = "deflate"
+path = "benches/deflate.rs"
+harness = false
