@@ -169,7 +169,7 @@ fn bench_framer(_c: &mut Criterion) {
         b.iter(|| {
             let chunk = CanonChunk::default();
             for _ in 0..1000 {
-                black_box(chunk.to_sse_json("chatcmpl-bench", "m", 0, false).is_none())
+                black_box(chunk.to_sse_json("chatcmpl-bench", "m", 0, false).is_none());
             }
         })
     });
