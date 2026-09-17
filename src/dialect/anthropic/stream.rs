@@ -243,14 +243,16 @@ fn flush_stop_tail(out: &mut Vec<(&'static str, String)>, state: &mut StreamStat
     if state.blocks.get(idx) != Some(&true) {
         return;
     }
-    let delta = if kind == "thinking" {
-        format!(
-            "{{\"thinking\":{},\"type\":\"thinking_delta\"}}",
-            json_str(&text)
-        )
+    let mut delta = String::with_capacity(48 + text.len());
+    if kind == "thinking" {
+        delta.push_str("{\"thinking\":");
+        write_json_str(&mut delta, &text);
+        delta.push_str(",\"type\":\"thinking_delta\"}");
     } else {
-        format!("{{\"text\":{},\"type\":\"text_delta\"}}", json_str(&text))
-    };
+        delta.push_str("{\"text\":");
+        write_json_str(&mut delta, &text);
+        delta.push_str(",\"type\":\"text_delta\"}");
+    }
     out.push(block_delta(idx, delta));
 }
 
@@ -274,17 +276,24 @@ fn next_index(state: &StreamState) -> usize {
 /// whenever known — for non-Anthropic upstreams the prompt count only ever
 /// arrives in the trailer, and this frame is the sole place it can surface.
 /// Cache counters ride along when present (clients bill on them).
-fn terminal_usage_json(input: u64, output: u64, cached_read: u64, cache_write: u64) -> String {
+fn write_terminal_usage(buf: &mut String, input: u64, output: u64, cached_read: u64, cache_write: u64) {
     // keys in serde's alphabetical order: cache_creation < cache_read < input < output
-    let mut u = String::from("{");
+    buf.push('{');
     if cache_write > 0 {
-        u.push_str(&format!("\"cache_creation_input_tokens\":{cache_write},"));
+        buf.push_str("\"cache_creation_input_tokens\":");
+        buf.push_str(&cache_write.to_string());
+        buf.push(',');
     }
     if cached_read > 0 {
-        u.push_str(&format!("\"cache_read_input_tokens\":{cached_read},"));
+        buf.push_str("\"cache_read_input_tokens\":");
+        buf.push_str(&cached_read.to_string());
+        buf.push(',');
     }
-    u.push_str(&format!("\"input_tokens\":{input},\"output_tokens\":{output}}}"));
-    u
+    buf.push_str("\"input_tokens\":");
+    buf.push_str(&input.to_string());
+    buf.push_str(",\"output_tokens\":");
+    buf.push_str(&output.to_string());
+    buf.push('}');
 }
 
 /// Terminal `message_delta` + `message_stop` carrying a mapped stop reason
@@ -302,18 +311,22 @@ fn emit_terminal(
     // OpenAI-dialect backends report it as a plain "stop", indistinguishable
     // from running out of things to say.
     let matched = state.stop_window.as_ref().and_then(|w| w.matched.clone());
-    let (stop_reason, stop_sequence) = match matched {
-        Some(s) => ("stop_sequence".to_string(), json_str(&s)),
-        None => (stop_reason, "null".to_string()),
-    };
-    out.push((
-        "message_delta",
-        format!(
-            "{{\"delta\":{{\"stop_reason\":{},\"stop_sequence\":{stop_sequence}}},\"type\":\"message_delta\",\"usage\":{}}}",
-            json_str(&stop_reason),
-            terminal_usage_json(prompt, usage.output, usage.cached_read, usage.cache_write),
-        ),
-    ));
+    let mut data = String::with_capacity(112);
+    data.push_str("{\"delta\":{\"stop_reason\":");
+    match &matched {
+        Some(s) => {
+            data.push_str("\"stop_sequence\",\"stop_sequence\":");
+            write_json_str(&mut data, s);
+        }
+        None => {
+            write_json_str(&mut data, &stop_reason);
+            data.push_str(",\"stop_sequence\":null");
+        }
+    }
+    data.push_str("},\"type\":\"message_delta\",\"usage\":");
+    write_terminal_usage(&mut data, prompt, usage.output, usage.cached_read, usage.cache_write);
+    data.push('}');
+    out.push(("message_delta", data));
     out.push((
         "message_stop",
         "{\"type\":\"message_stop\"}".to_string(),
@@ -348,15 +361,15 @@ pub fn chunk_to_sse_events(
 
     if state.first {
         state.first = false;
-        out.push((
-            "message_start",
-            format!(
-                "{{\"message\":{{\"content\":[],\"id\":{},\"model\":{},\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{{\"input_tokens\":{},\"output_tokens\":0}}}},\"type\":\"message_start\"}}",
-                json_str(msg_id),
-                json_str(model),
-                state.input_tokens,
-            ),
-        ));
+        let mut data = String::with_capacity(208 + msg_id.len() + model.len());
+        data.push_str("{\"message\":{\"content\":[],\"id\":");
+        write_json_str(&mut data, msg_id);
+        data.push_str(",\"model\":");
+        write_json_str(&mut data, model);
+        data.push_str(",\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"input_tokens\":");
+        data.push_str(&state.input_tokens.to_string());
+        data.push_str(",\"output_tokens\":0}},\"type\":\"message_start\"}");
+        out.push(("message_start", data));
     }
 
     // Usage-only trailer chunk (no content of any kind — the gemini shape
@@ -405,29 +418,30 @@ pub fn chunk_to_sse_events(
         // Reasoning models apply stop sequences to the thinking channel too,
         // so it is filtered exactly like visible text. Signatures are opaque
         // and never scanned.
-        let delta_json = match th.kind {
-            "signature" => Some(format!(
-                "{{\"signature\":{},\"type\":\"signature_delta\"}}",
-                json_str(&th.text)
-            )),
+        let text = match th.kind {
+            // borrow reuse: the delta feeds the frame builder straight from
+            // the chunk / stop window — no intermediate delta json String
+            "signature" => Some(std::borrow::Cow::Borrowed(&th.text)),
             _ => match state.stop_window.as_mut() {
-                Some(w) => {
-                    let emit = w.feed(idx, "thinking", &th.text);
-                    (!emit.is_empty()).then(|| {
-                        format!(
-                            "{{\"thinking\":{},\"type\":\"thinking_delta\"}}",
-                            json_str(&emit)
-                        )
-                    })
-                }
-                None => Some(format!(
-                    "{{\"thinking\":{},\"type\":\"thinking_delta\"}}",
-                    json_str(&th.text)
-                )),
+                Some(w) => match w.feed(idx, "thinking", &th.text) {
+                    s if s.is_empty() => None,
+                    s => Some(std::borrow::Cow::Owned(s)),
+                },
+                None => Some(std::borrow::Cow::Borrowed(&th.text)),
             },
         };
-        if let Some(delta_json) = delta_json {
-            out.push(block_delta(idx, delta_json));
+        if let Some(text) = text {
+            let mut delta = String::with_capacity(48 + text.len());
+            if th.kind == "signature" {
+                delta.push_str("{\"signature\":");
+                write_json_str(&mut delta, &text);
+                delta.push_str(",\"type\":\"signature_delta\"}");
+            } else {
+                delta.push_str("{\"thinking\":");
+                write_json_str(&mut delta, &text);
+                delta.push_str(",\"type\":\"thinking_delta\"}");
+            }
+            out.push(block_delta(idx, delta));
         }
     }
     if !chunk.delta_text.is_empty() {
@@ -479,16 +493,13 @@ pub fn chunk_to_sse_events(
                     msg_id,
                     tc["index"].as_u64().unwrap_or(0) as usize,
                 );
-                open_block(
-                    &mut out,
-                    state,
-                    idx,
-                    &format!(
-                        "{{\"id\":{},\"input\":{{}},\"name\":{},\"type\":\"tool_use\"}}",
-                        json_str(&id),
-                        json_str(name),
-                    ),
-                );
+                let mut block = String::with_capacity(48 + id.len() + name.len());
+                block.push_str("{\"id\":");
+                write_json_str(&mut block, &id);
+                block.push_str(",\"input\":{},\"name\":");
+                write_json_str(&mut block, name);
+                block.push_str(",\"type\":\"tool_use\"}");
+                open_block(&mut out, state, idx, &block);
             }
             if let Some(args) = tc["function"]["arguments"].as_str()
                 && !args.is_empty()
@@ -504,13 +515,11 @@ pub fn chunk_to_sse_events(
                     );
                     continue;
                 }
-                out.push(block_delta(
-                    idx,
-                    format!(
-                        "{{\"partial_json\":{},\"type\":\"input_json_delta\"}}",
-                        json_str(args)
-                    ),
-                ));
+                let mut delta = String::with_capacity(48 + args.len());
+                delta.push_str("{\"partial_json\":");
+                write_json_str(&mut delta, args);
+                delta.push_str(",\"type\":\"input_json_delta\"}");
+                out.push(block_delta(idx, delta));
             }
         }
     }

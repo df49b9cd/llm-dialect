@@ -56,7 +56,22 @@ pub(crate) fn json_str(s: &str) -> String {
 /// Append the JSON encoding of `s` (quotes + escapes, serde-identical) onto
 /// `buf` without an intermediate allocation — the writer variant of
 /// [`json_str`], for hot paths that assemble frames into one buffer.
+///
+/// Fast path first: streamed text rarely contains a byte that needs JSON
+/// escaping, so scan for one (`"` `\` and the C0 controls) and append the
+/// string verbatim between quotes; only fall back to serde's escaper when
+/// the scan finds a byte it must handle. The two paths emit identical bytes.
 pub(crate) fn write_json_str(buf: &mut String, s: &str) {
+    // C0 controls, quote, backslash — every byte JSON must escape.
+    fn needs_escape(c: char) -> bool {
+        matches!(c, '"' | '\\' | '\u{0000}'..='\u{001f}')
+    }
+    if !s.contains(needs_escape) {
+        buf.push('"');
+        buf.push_str(s);
+        buf.push('"');
+        return;
+    }
     serde_json::to_writer(StrWrite(buf), s).expect("string JSON encoding is infallible");
 }
 
