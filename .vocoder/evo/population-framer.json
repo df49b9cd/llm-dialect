@@ -79,10 +79,18 @@
     },
     {
       "name": "x4",
-      "commit": "7958ee3",
+      "commit": "b350586",
       "phase": "rebaseline",
       "rebaseline": true,
-      "scores": {},
+      "scores": {
+        "bench_geomean_ns": 23355.595,
+        "framer/anthropic_text_delta": 13206.647,
+        "framer/anthropic_turn_full": 18728.023,
+        "framer/openai_chat_to_sse_json": 19700.987,
+        "framer/openai_chat_tool_delta": 61064.846,
+        "canary_empty_chunk_skip_ns": 3174.802,
+        "test_count": 82
+      },
       "gate": "pass (82 tests, clippy 0)",
       "note": "scoring v2: canary_empty_chunk_skip loops 1000 empty-chunk calls per iteration \u2014 the single-call shape was smaller than cross-build layout jitter (~\u00b14%) and vetoed two improving candidates (r2 +4.34%, r5 +4.21%) at its +/-3% band edge. Scores re-established below under the new canary shape; versions before this row are never compared against later ones.",
       "noise_band": 0.0,
