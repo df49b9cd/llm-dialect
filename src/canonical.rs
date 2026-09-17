@@ -45,6 +45,60 @@ pub fn join_text_parts(parts: &[serde_json::Value]) -> String {
         .join("")
 }
 
+/// The JSON encoding of a string leaf — quotes and escapes exactly as
+/// serde_json emits them — so hand-assembled frames stay byte-identical to
+/// the `Value`-tree output they replaced (keys ride in serde's BTreeMap
+/// order; dynamic leaves still escape through serde itself).
+pub(crate) fn json_str(s: &str) -> String {
+    serde_json::to_string(s).expect("string JSON encoding is infallible")
+}
+
+/// Append the JSON encoding of `s` (quotes + escapes, serde-identical) onto
+/// `buf` without an intermediate allocation — the writer variant of
+/// [`json_str`], for hot paths that assemble frames into one buffer.
+///
+/// Fast path first: streamed text rarely contains a byte that needs JSON
+/// escaping, so scan for one (`"` `\` and the C0 controls) and append the
+/// string verbatim between quotes; only fall back to serde's escaper when
+/// the scan finds a byte it must handle. The two paths emit identical bytes.
+pub(crate) fn write_json_str(buf: &mut String, s: &str) {
+    // C0 controls, quote, backslash — every byte JSON must escape.
+    fn needs_escape(c: char) -> bool {
+        matches!(c, '"' | '\\' | '\u{0000}'..='\u{001f}')
+    }
+    if !s.contains(needs_escape) {
+        buf.push('"');
+        buf.push_str(s);
+        buf.push('"');
+        return;
+    }
+    serde_json::to_writer(StrWrite(buf), s).expect("string JSON encoding is infallible");
+}
+
+/// `io::Write` adapter over a `String`. serde_json's escaper emits each
+/// escape sequence and each passthrough slice as one write; both are valid
+/// UTF-8 on their own, so the validation below always succeeds — it exists
+/// to keep the borrow sound, not to police serde.
+struct StrWrite<'a>(&'a mut String);
+
+impl std::io::Write for StrWrite<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match std::str::from_utf8(buf) {
+            Ok(s) => {
+                self.0.push_str(s);
+                Ok(buf.len())
+            }
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "non-UTF-8 byte in JSON writer output",
+            )),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// `ChatRequest::extra` key meaning "the trailing assistant turn is a prefill
 /// the model must continue, not a finished turn". Set by the items deflater,
 /// consumed and removed by the provider senders — it names an intent the
@@ -213,19 +267,16 @@ impl CanonChunk {
         created: u64,
         include_usage: bool,
     ) -> Option<String> {
+        // The early-out gate stays in this thin prologue (one `is_empty` and
+        // three `Option::is_none` checks) so the canary-guarded empty-chunk
+        // skip keeps its inline fast path; the assembly body below is a
+        // separate cold function the prologue tail-calls only when there is
+        // work — codegen then sizes each path for its own job.
         if include_usage {
-            let u = self.usage.as_ref()?;
-            return Some(
-                serde_json::json!({
-                    "id": id, "object": "chat.completion.chunk", "created": created,
-                    "model": model, "choices": [],
-                    "usage": {"prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens,
-                              "total_tokens": u.prompt_tokens + u.completion_tokens,
-                              "cached_read_tokens": u.cached_read_tokens,
-                              "cache_write_tokens": u.cache_write_tokens}
-                })
-                .to_string(),
-            );
+            return self
+                .usage
+                .as_ref()
+                .map(|u| self.usage_frame(id, model, created, u));
         }
         if self.delta_text.is_empty()
             && self.tool_calls.is_none()
@@ -234,29 +285,84 @@ impl CanonChunk {
         {
             return None;
         }
-        // omit `content` entirely on tool-call-only deltas — a literal "" confuses
-        // strict merge-by-index clients
-        let mut delta = serde_json::json!({});
+        Some(self.delta_frame(id, model, created))
+    }
+
+    /// The usage-trailer chunk frame (one-buffer assembly; alphabetical key
+    /// order as serde emits it).
+    fn usage_frame(&self, id: &str, model: &str, created: u64, u: &Usage) -> String {
+        let mut out = String::with_capacity(160 + id.len() + model.len());
+        out.push_str("{\"choices\":[],\"created\":");
+        out.push_str(&created.to_string());
+        out.push_str(",\"id\":");
+        write_json_str(&mut out, id);
+        out.push_str(",\"model\":");
+        write_json_str(&mut out, model);
+        out.push_str(",\"object\":\"chat.completion.chunk\",\"usage\":{\"cache_write_tokens\":");
+        out.push_str(&u.cache_write_tokens.to_string());
+        out.push_str(",\"cached_read_tokens\":");
+        out.push_str(&u.cached_read_tokens.to_string());
+        out.push_str(",\"completion_tokens\":");
+        out.push_str(&u.completion_tokens.to_string());
+        out.push_str(",\"prompt_tokens\":");
+        out.push_str(&u.prompt_tokens.to_string());
+        out.push_str(",\"total_tokens\":");
+        out.push_str(&(u.prompt_tokens + u.completion_tokens).to_string());
+        out.push_str("}}");
+        out
+    }
+
+    // omit `content` entirely on tool-call-only deltas — a literal "" confuses
+    // strict merge-by-index clients
+    //
+    /// The delta-chunk frame. The whole frame assembles into ONE buffer — no
+    /// intermediate delta/finish_reason/id/model strings; dynamic leaves
+    /// escape straight into `out` via the writer, keeping the wire bytes
+    /// identical.
+    fn delta_frame(&self, id: &str, model: &str, created: u64) -> String {
+        let mut out = String::with_capacity(112 + id.len() + model.len() + self.delta_text.len());
+        out.push_str("{\"choices\":[{\"delta\":{");
+        let mut wrote_key = false;
         if !self.delta_text.is_empty() {
-            delta["content"] = serde_json::json!(self.delta_text);
-        }
-        if let Some(tcs) = &self.tool_calls {
-            delta["tool_calls"] = tcs.clone();
+            out.push_str("\"content\":");
+            write_json_str(&mut out, &self.delta_text);
+            wrote_key = true;
         }
         if let Some(th) = &self.thinking {
-            delta["thinking"] = serde_json::json!({
-                "block_index": th.block_index,
-                "kind": th.kind,
-                "text": th.text,
-            });
+            if wrote_key {
+                out.push(',');
+            }
+            wrote_key = true;
+            out.push_str("\"thinking\":{\"block_index\":");
+            out.push_str(&th.block_index.to_string());
+            out.push_str(",\"kind\":");
+            write_json_str(&mut out, th.kind);
+            out.push_str(",\"text\":");
+            write_json_str(&mut out, &th.text);
+            out.push('}');
         }
-        Some(
-            serde_json::json!({
-                "id": id, "object": "chat.completion.chunk", "created": created,
-                "model": model,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": self.finish_reason}]
-            })
-            .to_string(),
-        )
+        if let Some(tcs) = &self.tool_calls {
+            if wrote_key {
+                out.push(',');
+            }
+            out.push_str("\"tool_calls\":");
+            // a Value serializes to the identical bytes it contributed inside
+            // the parent tree — embed it without the deep clone
+            serde_json::to_writer(StrWrite(&mut out), tcs)
+                .expect("Value serialization is infallible");
+        }
+        out.push_str("},\"finish_reason\":");
+        match &self.finish_reason {
+            Some(fr) => write_json_str(&mut out, fr),
+            None => out.push_str("null"),
+        }
+        out.push_str(",\"index\":0}],\"created\":");
+        out.push_str(&created.to_string());
+        out.push_str(",\"id\":");
+        write_json_str(&mut out, id);
+        out.push_str(",\"model\":");
+        write_json_str(&mut out, model);
+        out.push_str(",\"object\":\"chat.completion.chunk\"}");
+        out
     }
 }
