@@ -1,5 +1,38 @@
 # AVO program plan — llm-dialect
 
+## Pause note (framer scope — 2026-09-17, after x5)
+
+**Verdict history.** x0 104708 → x1 −74.3% → x2 −8.6% → x3 −4.6% (within-band rollup,
+per-bench wins) → x4 rebaseline (scoring v2) → x5 −12.0% geomean driven by chat_to_sse.
+Two consecutive non-improving verdicts on the geomean roll-up (x3 partial, r6-era band
+widening absorbed the delta) — rule 4 applies; and the structural operator pool is
+exhausted: every frame is now single-buffer, all dynamic leaves escape in one pass,
+event names are borrowed statics, and the prose-delta profile is 83 ns/chunk of the
+remaining turn_turn 13104 ns — thinking/tool/terminal frames dominate and are already
+minimal.
+
+**Where the remaining cost lives** — nothing obvious left in the serializer:
+- `anthropic_turn_full` 18482 ns: 40 thinking chunks (block-open close-reopen + one
+  alloc each) + 20 tool-arg frames + the terminal pair. All single-buffer single-alloc
+  already; further cuts mean rethinking block-index bookkeeping, not assembly.
+- `anthropic_text_delta` 13022 ns: two String allocs per chunk (frame + escaped text
+  member in `write_json_str` on escape-heavy input, none on clean input) — already at
+  the allocator floor.
+- `openai_chat_tool_delta` 53740 ns: `tcs.to_string()` embed — serde_json's own
+  serializer on a Value it just parsed upstream. Real win possible by routing tool_call
+  deltas through the same literal-with-escapes path as `text_delta` (the OpenAI wire
+  shape for tool deltas is fixed at ~8 fields). That's a small constant-factor chase.
+
+**Decision: pause the framer scope at x5.** Diminishing returns (rule 7) — the slope
+flattened across 3 committed versions even before the rebaseline; further wins are
+cycle-level fiddling on code that's already 5× faster than x0. If a fresh prompt shows
+up (e.g. a Gemini dialect adapter or a resize of the SSE pump), start a new scope
+against it rather than grinding this one further.
+
+**Next-scope candidates for when work resumes:** (1) `deflate.rs` items→chat flattening
+(request path isn't bench-instrumented at all); (2) a `req.rs` parse-cost scope —
+the inbound surface, zero bench coverage today.
+
 ## Steering note (after r5 rejection — 2026-09-16, scope: framer)
 
 **Situation.** r5 (one-buffer assembly completion + escape-scan fast path) improved
