@@ -273,7 +273,10 @@ impl CanonChunk {
         // separate cold function the prologue tail-calls only when there is
         // work — codegen then sizes each path for its own job.
         if include_usage {
-            return self.usage.as_ref().map(|u| self.usage_frame(id, model, created, u));
+            return self
+                .usage
+                .as_ref()
+                .map(|u| self.usage_frame(id, model, created, u));
         }
         if self.delta_text.is_empty()
             && self.tool_calls.is_none()

@@ -9,7 +9,7 @@
 //! driver (`dialect::sse`), and this file's `anthropic_stream_response` is
 //! the thin axum shell wiring state machine to pump.
 
-use crate::canonical::{json_str, write_json_str, CanonChunk, Usage};
+use crate::canonical::{CanonChunk, Usage, json_str, write_json_str};
 #[cfg(feature = "axum")]
 use crate::error::ProxyError;
 #[cfg(feature = "axum")]
@@ -215,7 +215,12 @@ fn block_stop(idx: usize) -> (&'static str, String) {
     )
 }
 
-fn open_block(out: &mut Vec<(&'static str, String)>, state: &mut StreamState, idx: usize, block: &str) {
+fn open_block(
+    out: &mut Vec<(&'static str, String)>,
+    state: &mut StreamState,
+    idx: usize,
+    block: &str,
+) {
     flush_stop_tail(out, state);
     // close everything below idx that is still open — SSE blocks are sequential
     for i in 0..idx {
@@ -276,7 +281,13 @@ fn next_index(state: &StreamState) -> usize {
 /// whenever known — for non-Anthropic upstreams the prompt count only ever
 /// arrives in the trailer, and this frame is the sole place it can surface.
 /// Cache counters ride along when present (clients bill on them).
-fn write_terminal_usage(buf: &mut String, input: u64, output: u64, cached_read: u64, cache_write: u64) {
+fn write_terminal_usage(
+    buf: &mut String,
+    input: u64,
+    output: u64,
+    cached_read: u64,
+    cache_write: u64,
+) {
     // keys in serde's alphabetical order: cache_creation < cache_read < input < output
     buf.push('{');
     if cache_write > 0 {
@@ -324,13 +335,16 @@ fn emit_terminal(
         }
     }
     data.push_str("},\"type\":\"message_delta\",\"usage\":");
-    write_terminal_usage(&mut data, prompt, usage.output, usage.cached_read, usage.cache_write);
+    write_terminal_usage(
+        &mut data,
+        prompt,
+        usage.output,
+        usage.cached_read,
+        usage.cache_write,
+    );
     data.push('}');
     out.push(("message_delta", data));
-    out.push((
-        "message_stop",
-        "{\"type\":\"message_stop\"}".to_string(),
-    ));
+    out.push(("message_stop", "{\"type\":\"message_stop\"}".to_string()));
     state.message_stopped = true;
 }
 
@@ -411,7 +425,12 @@ pub fn chunk_to_sse_events(
             _ => {
                 let i = next_index(state);
                 state.thinking_index = Some(i);
-                open_block(&mut out, state, i, "{\"thinking\":\"\",\"type\":\"thinking\"}");
+                open_block(
+                    &mut out,
+                    state,
+                    i,
+                    "{\"thinking\":\"\",\"type\":\"thinking\"}",
+                );
                 i
             }
         };
@@ -805,13 +824,13 @@ mod tests {
         all
     }
 
-    fn types(all: &[(&'static str, String)]) -> Vec<&str> {
-        all.iter().map(|(e, _)| e.as_str()).collect()
+    fn types(all: &[(&'static str, String)]) -> Vec<&'static str> {
+        all.iter().map(|(e, _)| *e).collect()
     }
 
-    fn data_of<'a>(all: &'a [(&'static str, String)], ev: &str) -> Vec<&'a str> {
+    fn data_of<'a>(all: &'a [(&'static str, String)], ev: &'static str) -> Vec<&'a str> {
         all.iter()
-            .filter(|(e, _)| e == ev)
+            .filter(|(e, _)| *e == ev)
             .map(|(_, d)| d.as_str())
             .collect()
     }
@@ -828,9 +847,9 @@ mod tests {
         let mut st = StreamState::new();
         let evs = chunk_to_sse_events(&text("Hi"), "translate-model", &mut st, "msg_1");
         assert_eq!(evs[0].0, "message_start");
-        assert!(evs.iter().any(|(t, _)| t == "content_block_delta"));
+        assert!(evs.iter().any(|(t, _)| *t == "content_block_delta"));
         assert!(
-            !evs.iter().any(|(t, _)| t == "ping"),
+            !evs.iter().any(|(t, _)| *t == "ping"),
             "ping is one-shot preamble noise; real Anthropic streams ping periodically, not here"
         );
 
@@ -968,7 +987,7 @@ mod tests {
         for (ev, d) in &all {
             let v: serde_json::Value = serde_json::from_str(d).unwrap();
             let idx = v["index"].as_i64();
-            match ev.as_str() {
+            match *ev {
                 "content_block_start" => {
                     if let Some(i) = idx {
                         assert!(seen_started.insert(i), "block {i} started twice");
@@ -1111,7 +1130,7 @@ mod tests {
         ));
         let md = serde_json::from_str::<serde_json::Value>(
             evs.iter()
-                .find(|(e, _)| e == "message_delta")
+                .find(|(e, _)| *e == "message_delta")
                 .map(|(_, d)| d.as_str())
                 .unwrap(),
         )

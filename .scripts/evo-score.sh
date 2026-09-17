@@ -205,12 +205,19 @@ fi
 
 if [[ "${gate:-skip}" == "pass" ]]; then
     gate="pass"
-    cargo build --workspace >/dev/null 2>&1 || { gate="fail: build"; }
+    # --all-features: feature-gated shells (the axum SSE pump, its tests) hold
+    # real code paths the default feature set doesn't compile — a candidate
+    # passing only on the default subset would silently change the code CI
+    # runs. fmt is the same class of gate, cheaper to run than discover at CI.
+    cargo build --workspace --all-features >/dev/null 2>&1 || { gate="fail: build"; }
+    if [[ "$gate" == "pass" ]] && command -v cargo-fmt >/dev/null 2>&1; then
+        cargo fmt --check >/dev/null 2>&1 || { gate="fail: fmt"; }
+    fi
     if [[ "$gate" == "pass" ]] && command -v cargo-nextest >/dev/null 2>&1; then
-        cargo nextest run --workspace >/dev/null 2>&1 || { gate="fail: nextest"; }
+        cargo nextest run --workspace --all-features >/dev/null 2>&1 || { gate="fail: nextest"; }
     fi
     if [[ "$gate" == "pass" ]]; then
-        cargo clippy --workspace --all-targets -- -D warnings >/dev/null 2>&1 || {
+        cargo clippy --workspace --all-targets --all-features -- -D warnings >/dev/null 2>&1 || {
             gate="fail: clippy"
         }
     fi

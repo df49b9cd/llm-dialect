@@ -24,7 +24,10 @@ Vary(P_t) = Agent(P_t, K, f)
 - **K — the knowledge base.** Here: `AGENTS.md`, `docs/`, benchmark baselines,
   and reference implementations the agent consults.
 - **f — the scoring function.** Here: the correctness gate
-  (`cargo build --workspace` + `cargo nextest run` + `cargo clippy --workspace --all-targets -- -D warnings`) gates every candidate; the score tuple (bench geomean,
+  (`cargo build --workspace --all-features` + `cargo fmt --check` +
+   `cargo nextest run --workspace --all-features` +
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings`)
+   gates every candidate; the score tuple (bench geomean,
   warning count, test count) ranks survivors per scope. Computed uniformly by
   `.scripts/evo-score.sh`.
 
