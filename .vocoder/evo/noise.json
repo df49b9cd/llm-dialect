@@ -4,67 +4,67 @@
   "metrics": {
     "canary_empty_chunk_skip_ns": {
       "runs": 3,
-      "mean_ns": 5.917,
-      "cv_pct": 0.21,
-      "range_pct": 1.2,
-      "stat_band_pct": 0.35,
+      "mean_ns": 3220.737,
+      "cv_pct": 0.63,
+      "range_pct": 1.5,
+      "stat_band_pct": 1.03,
       "improve_band_pct": 3.0,
       "samples_ns": [
-        5.915,
-        5.902,
-        5.933
+        3193.058,
+        3241.52,
+        3227.631
       ]
     },
     "framer/anthropic_text_delta": {
       "runs": 3,
-      "mean_ns": 68938.071,
-      "cv_pct": 1.33,
-      "range_pct": 3.12,
-      "stat_band_pct": 2.18,
-      "improve_band_pct": 3.9,
+      "mean_ns": 13818.677,
+      "cv_pct": 3.42,
+      "range_pct": 7.75,
+      "stat_band_pct": 5.58,
+      "improve_band_pct": 9.69,
       "samples_ns": [
-        70207.66,
-        68057.34,
-        68549.213
+        14070.213,
+        13157.427,
+        14228.391
       ]
     },
     "framer/anthropic_turn_full": {
       "runs": 3,
-      "mean_ns": 93716.958,
-      "cv_pct": 0.41,
-      "range_pct": 2.22,
-      "stat_band_pct": 0.68,
-      "improve_band_pct": 3.0,
+      "mean_ns": 19250.611,
+      "cv_pct": 5.01,
+      "range_pct": 10.88,
+      "stat_band_pct": 8.18,
+      "improve_band_pct": 13.61,
       "samples_ns": [
-        93996.446,
-        93167.694,
-        93986.735
+        18517.742,
+        18621.068,
+        20613.024
       ]
     },
     "framer/openai_chat_to_sse_json": {
       "runs": 3,
-      "mean_ns": 113999.159,
-      "cv_pct": 2.1,
-      "range_pct": 5.06,
-      "stat_band_pct": 3.43,
-      "improve_band_pct": 6.33,
+      "mean_ns": 19260.57,
+      "cv_pct": 0.65,
+      "range_pct": 1.43,
+      "stat_band_pct": 1.06,
+      "improve_band_pct": 3.0,
       "samples_ns": [
-        116577.277,
-        110804.235,
-        114615.967
+        19083.94,
+        19358.873,
+        19338.897
       ]
     },
     "framer/openai_chat_tool_delta": {
       "runs": 3,
-      "mean_ns": 217872.61,
-      "cv_pct": 1.54,
-      "range_pct": 3.69,
-      "stat_band_pct": 2.52,
-      "improve_band_pct": 4.61,
+      "mean_ns": 58428.81,
+      "cv_pct": 0.09,
+      "range_pct": 3.7,
+      "stat_band_pct": 0.14,
+      "improve_band_pct": 4.62,
       "samples_ns": [
-        222624.488,
-        215528.924,
-        215464.419
+        58359.043,
+        58446.992,
+        58480.396
       ]
     }
   }
