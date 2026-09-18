@@ -1,0 +1,17 @@
+{
+  "schema": "avo-population/v1",
+  "lineage": "deflate — items→chat deflate (the chained req→deflate pipeline)",
+  "scoring": {
+    "gate": "see docs/EVO.md — the correctness gate for this repo's toolchain",
+    "f": "see docs/EVO.md — scope picks its primary score (bench_geomean_ns / warnings / test_count / docs metric)"
+  },
+  "x0": {
+    "name": "x0",
+    "commit": "e8a50e3",
+    "phase": "baseline",
+    "scores": {},
+    "gate": "pending",
+    "note": "seeded by evo-kickoff.sh; fill scores with .scripts/evo-score.sh"
+  },
+  "committed": []
+}

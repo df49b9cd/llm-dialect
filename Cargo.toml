@@ -45,3 +45,13 @@ tokio = { version = "1", features = ["macros", "rt"] }
 name = "framer"
 path = "benches/framer.rs"
 harness = false
+
+[[bench]]
+name = "req"
+path = "benches/req.rs"
+harness = false
+
+[[bench]]
+name = "deflate"
+path = "benches/deflate.rs"
+harness = false

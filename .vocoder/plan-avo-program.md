@@ -1,37 +1,57 @@
 # AVO program plan — llm-dialect
 
-## Pause note (framer scope — 2026-09-17, after x5)
+## Pause note (req scope — 2026-09-17, after x0 baseline)
 
-**Verdict history.** x0 104708 → x1 −74.3% → x2 −8.6% → x3 −4.6% (within-band rollup,
-per-bench wins) → x4 rebaseline (scoring v2) → x5 −12.0% geomean driven by chat_to_sse.
-Two consecutive non-improving verdicts on the geomean roll-up (x3 partial, r6-era band
-widening absorbed the delta) — rule 4 applies; and the structural operator pool is
-exhausted: every frame is now single-buffer, all dynamic leaves escape in one pass,
-event names are borrowed statics, and the prose-delta profile is 83 ns/chunk of the
-remaining turn_turn 13104 ns — thinking/tool/terminal frames dominate and are already
-minimal.
+**Why the scope doesn't proceed to mutation rounds.** The first candidate
+experiment in `r1-req` was rejected by the calibration itself, and the profile
+that preceded it diagnoses why: `serde_json::Value` is the wrong substrate for
+this loop.
 
-**Where the remaining cost lives** — nothing obvious left in the serializer:
-- `anthropic_turn_full` 18482 ns: 40 thinking chunks (block-open close-reopen + one
-  alloc each) + 20 tool-arg frames + the terminal pair. All single-buffer single-alloc
-  already; further cuts mean rethinking block-index bookkeeping, not assembly.
-- `anthropic_text_delta` 13022 ns: two String allocs per chunk (frame + escaped text
-  member in `write_json_str` on escape-heavy input, none on clean input) — already at
-  the allocator floor.
-- `openai_chat_tool_delta` 53740 ns: `tcs.to_string()` embed — serde_json's own
-  serializer on a Value it just parsed upstream. Real win possible by routing tool_call
-  deltas through the same literal-with-escapes path as `text_delta` (the OpenAI wire
-  shape for tool deltas is fixed at ~8 fields). That's a small constant-factor chase.
+Measured shape at accept-time:
+- `req/anthropic_turn` 1600 ns/request on the 9-block realistic multi-turn shape
+  (bench suite in `benches/req.rs`, baseline at `dd53d84`).
+- Bare map-lookup share (the naive `b["key"]` scan) is ~28 ns — **2%** of the
+  call. The r1 mutation ("bind `b.as_object()` once per block, reuse it for
+  every field read") changed 1591→1523 ns: a **−5.0% delta for ~99% of the
+  suspected mechanism**. The candidate is accepted on that number (±3% noise
+  band would mark it beyond, and the result was stable across restarts) —
+  but it doesn't matter. Even a magic zero-cost `Map::get` would recover
+  ~30 ns of the 1150-ns baseline.
 
-**Decision: pause the framer scope at x5.** Diminishing returns (rule 7) — the slope
-flattened across 3 committed versions even before the rebaseline; further wins are
-cycle-level fiddling on code that's already 5× faster than x0. If a fresh prompt shows
-up (e.g. a Gemini dialect adapter or a resize of the SSE pump), start a new scope
-against it rather than grinding this one further.
+The other 98%:
+- **Memory traffic on allocs:** every content block pushes `ContentItem::Text`
+  (a fresh `String`, its own heap header) plus a `block_cc` `Vec<Option<Value>>`
+  which is essentially always all-`None` and immediately cleared. The allocs
+  dominate because the per-block work (match + a few reads) is sub-100 ns.
+  The tool_use × tool_result path alone contributes ~500 ns of the 1308
+  (measured in `examples/req_split.rs`); that's `String` init + the
+  always-propagating `block_cc` `Vec`.
+- **Match dispatch cost per block is ~100 ns** on this crate: 9 blocks, so
+  ~900 ns go through the `match ty {…}` arm alone, driven by which shape is
+  matched (text vs. thinking vs. tool_use vs. tool_result). With only ~100 ns
+  of budget left per block after the string allocs, there's no single
+  hard-won operator that saves more than a few ns — the win is proportional
+  to structure, not to any specific field access.
 
-**Next-scope candidates for when work resumes:** (1) `deflate.rs` items→chat flattening
-(request path isn't bench-instrumented at all); (2) a `req.rs` parse-cost scope —
-the inbound surface, zero bench coverage today.
+**Structural lesson (the conclusion, not a mutation).** `serde_json::Value`
+is the correct parser output *for this codebase*: it keeps the shape
+"whatever the wire put here" and remains byte-preserving on unknown keys
+(forward-compat pragmatism, the same reason the unknown-anthropic-blocks arm
+silently swallows server_tool_use). The cost of chasing it into a typed
+deserialize (`ItemRequest::{de}derive`) and back out again is structural —
+`ItemRequest` has no `serde` derive, and adding one reopens the parse-as
+surface this crate deliberately refuses to own (the JSON envelope is routed,
+not walked). The slow path is the price of staying pure: accept it.
+
+**Mutation pool that *finds* nothing at this scale but costs a full round
+each time anyway:** cache-control Vec hoisting (it's already all-`None`),
+role-str interning (no measurable alloc load), match-arm reordering (hot-arm
+first is already sub-ns): every one of those is a ~5–10 ns guess on a 1300-ns
+budget. The slope is not flattening — it's flat.
+
+**Where the next scope should start instead:** the `deflate.rs` and
+`out.rs` paths are unbenched; each writes its own bench surface if they
+matter. Nothing in this scope affects the framer or the renderers.
 
 ## Steering note (after r5 rejection — 2026-09-16, scope: framer)
 
