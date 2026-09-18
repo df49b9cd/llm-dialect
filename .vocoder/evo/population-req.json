@@ -1,0 +1,17 @@
+{
+  "schema": "avo-population/v1",
+  "lineage": "req — request-parse hot path (benches/req.rs: anthropic/openai_chat/openai_responses + empty-messages canary)",
+  "scoring": {
+    "gate": "see docs/EVO.md — the correctness gate for this repo's toolchain",
+    "f": "see docs/EVO.md — scope picks its primary score (bench_geomean_ns / warnings / test_count / docs metric)"
+  },
+  "x0": {
+    "name": "x0",
+    "commit": "dd53d84",
+    "phase": "baseline",
+    "scores": {},
+    "gate": "pending",
+    "note": "seeded by evo-kickoff.sh; fill scores with .scripts/evo-score.sh"
+  },
+  "committed": []
+}
