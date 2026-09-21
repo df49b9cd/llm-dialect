@@ -24,6 +24,9 @@ path = "src/lib.rs"
 # engine) get the pure mapping without an HTTP framework dependency.
 default = []
 axum = ["dep:axum"]
+# HTTP client transport (DialectClient): reqwest on tokio + rustls, no OpenSSL.
+# Pure translation stays dependency-free; only this feature pulls I/O.
+client = ["dep:reqwest"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -32,16 +35,24 @@ thiserror = "2"
 anyhow = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
+bytes = "1"
 tracing = "0.1"
 eventsource-stream = "0.2"
 axum = { version = "0.8", optional = true }
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json", "stream"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "plotters"] }
 hex = "0.4"
+axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt"] }
 
 [[bench]]
 name = "framer"
 path = "benches/framer.rs"
 harness = false
+
+[[test]]
+name = "client_streams"
+path = "tests/client_streams.rs"
+required-features = ["client", "axum"]

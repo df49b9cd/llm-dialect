@@ -13,6 +13,8 @@
 //! `Response` shells for embedders that *are* an axum service.
 
 pub mod canonical;
+#[cfg(feature = "client")]
+pub mod client;
 pub mod dialect;
 pub mod error;
 pub mod items;

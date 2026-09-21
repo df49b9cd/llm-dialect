@@ -23,11 +23,17 @@ pub struct DeframeOut {
 
 pub struct OpenAiDeframer {
     done_seen: bool,
+    /// error frames arrive in-band; the trailing `[DONE]` they carry is
+    /// swallowed rather than reported as a second terminal
+    error_after_done: bool,
 }
 
 impl OpenAiDeframer {
     pub fn new() -> Self {
-        Self { done_seen: false }
+        Self {
+            done_seen: false,
+            error_after_done: false,
+        }
     }
 
     /// Feed one `data:` payload (the text after `data: `, without the
@@ -40,12 +46,20 @@ impl OpenAiDeframer {
     ///   frame arriving after the terminal. The stream is broken; the caller
     ///   should abort.
     pub fn push_data(&mut self, data: &str) -> Result<DeframeOut, ProxyError> {
-        if self.done_seen {
+        if self.done_seen && data.trim() != "[DONE]" {
             return Err(ProxyError::Transport(
                 "chunk received after terminal [DONE]".into(),
             ));
         }
         if data.trim() == "[DONE]" {
+            // in-band error frames already set done_seen; the trailing
+            // [DONE] they own is consumed silently
+            if self.done_seen && self.error_after_done {
+                return Ok(DeframeOut::default());
+            }
+            if self.done_seen {
+                return Err(ProxyError::Transport("duplicate [DONE]".into()));
+            }
             self.done_seen = true;
             return Ok(DeframeOut {
                 chunk: None,
@@ -56,6 +70,7 @@ impl OpenAiDeframer {
             .map_err(|e| ProxyError::Transport(format!("malformed stream chunk JSON: {e}")))?;
         if v["error"].is_object() {
             self.done_seen = true;
+            self.error_after_done = true;
             let msg = v["error"]["message"]
                 .as_str()
                 .unwrap_or("upstream error")
