@@ -4,7 +4,7 @@
 //! Inverse of [`crate::dialect::anthropic::out::response_from_canonical`]:
 //! parses a non-streaming `/v1/messages` body into an assistant
 //! [`ItemStreamMessage`] (so the turn can be appended directly to an
-//! ongoing [`ItemRequest`] conversation), the canonical cache-INCLUSIVE
+//! ongoing [`ItemRequest`](crate::items::ItemRequest) conversation), the canonical cache-INCLUSIVE
 //! [`Usage`], and the stop reason in OpenAI's `finish_reason` vocabulary
 //! (`stop`, `length`, `tool_calls`) — the stop-reason table is the exact
 //! inverse of the stream-side outbound mapping.
