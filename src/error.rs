@@ -34,6 +34,15 @@ pub enum ProxyError {
     Internal(#[from] anyhow::Error),
 }
 
+/// Wire dialect of an error envelope, for client-side parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorDialect {
+    /// OpenAI chat / Responses: `{"error": {"message", "type", "code"}}`.
+    OpenAi,
+    /// Anthropic: `{"type": "error", "error": {"type", "message"}}`.
+    Anthropic,
+}
+
 impl ProxyError {
     pub fn upstream(status: u16, body: String) -> Self {
         ProxyError::Upstream {
@@ -120,4 +129,94 @@ pub fn error_response(err: &ProxyError) -> axum::response::Response {
         })),
     )
         .into_response()
+}
+
+/// Parse a provider error envelope from the client direction into one
+/// `ProxyError` — the inverse of [`crate::dialect::anthropic::out::error_json`]
+/// and the OpenAI-style envelope from `error_response` (feature `axum`).
+/// Typed codes map to the matching variant when one
+/// exists (`authentication_error` → [`ProxyError::Unauthorized`],
+/// rate-limit shapes → [`ProxyError::RateLimited`]); everything else
+/// degrades to [`ProxyError::Upstream`] carrying the status and the
+/// provider's own message, which on the client side is the useful signal.
+pub fn error_from_wire(status: u16, body: &str, dialect: ErrorDialect) -> ProxyError {
+    let v: serde_json::Value =
+        serde_json::from_str(body).unwrap_or(serde_json::Value::Object(Default::default()));
+    let (ty, message) = match dialect {
+        ErrorDialect::Anthropic => (
+            v["error"]["type"].as_str().unwrap_or_default(),
+            v["error"]["message"].as_str().unwrap_or(body).to_string(),
+        ),
+        ErrorDialect::OpenAi => (
+            v["error"]["type"].as_str().unwrap_or_default(),
+            v["error"]["message"].as_str().unwrap_or(body).to_string(),
+        ),
+    };
+    let retry_after_secs = v["error"]["retry_after_secs"]
+        .as_u64()
+        .or_else(|| v["error"]["retry_after"].as_u64());
+    match ty {
+        "authentication_error" | "invalid_api_key" => ProxyError::Unauthorized,
+        "rate_limit_error" | "rate_limit_exceeded" | "tokens" | "requests" => {
+            ProxyError::RateLimited
+        }
+        _ => ProxyError::Upstream {
+            status,
+            body: message,
+            retry_after_secs,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_anthropic_envelope() {
+        let e = error_from_wire(
+            429,
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#,
+            ErrorDialect::Anthropic,
+        );
+        assert!(matches!(e, ProxyError::RateLimited));
+    }
+
+    #[test]
+    fn parses_openai_envelope() {
+        let e = error_from_wire(
+            401,
+            r#"{"error":{"message":"bad key","type":"authentication_error","code":"invalid_api_key"}}"#,
+            ErrorDialect::OpenAi,
+        );
+        assert!(matches!(e, ProxyError::Unauthorized));
+    }
+
+    #[test]
+    fn unknown_types_degrade_to_upstream_with_message() {
+        let e = error_from_wire(
+            500,
+            r#"{"type":"error","error":{"type":"api_error","message":"boom"}}"#,
+            ErrorDialect::Anthropic,
+        );
+        match e {
+            ProxyError::Upstream { status, body, .. } => {
+                assert_eq!(status, 500);
+                assert_eq!(body, "boom");
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn non_json_body_still_yields_upstream_at_status() {
+        let e = error_from_wire(503, "Service Unavailable", ErrorDialect::OpenAi);
+        match e {
+            ProxyError::Upstream { status, body, .. } => {
+                assert_eq!(status, 503);
+                assert_eq!(body, "Service Unavailable");
+            }
+            _ => panic!(),
+        }
+    }
 }

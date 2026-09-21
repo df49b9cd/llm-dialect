@@ -6,4 +6,6 @@
 
 pub mod out;
 pub mod req;
+pub mod req_out;
+pub mod resp_in;
 pub mod stream;
