@@ -5,7 +5,7 @@
 //! the canonical type. The one normalization the wire needs is usage
 //! enrichment: OpenAI reports cached tokens under
 //! `usage.prompt_tokens_details.cached_tokens`, and the canonical model
-//! lifts that into [`Usage::cached_read_tokens`] so `prompt_tokens`
+//! lifts that into `Usage::cached_read_tokens` so `prompt_tokens`
 //! (cache-inclusive per OpenAI's convention) needs no further arithmetic.
 
 use crate::canonical::ChatResponse;
