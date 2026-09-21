@@ -6,4 +6,5 @@
 //! in, and un-folds it on the way out.
 
 pub mod req;
+pub mod resp_in;
 pub mod stream;
