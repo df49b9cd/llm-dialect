@@ -249,7 +249,7 @@ mod tests {
         let mut outs = Vec::new();
         for c in &chunks {
             for (ev, data) in super::super::stream::chunk_to_sse_events(c, "m", &mut st, "msg_1") {
-                match d.push(&ev, &data) {
+                match d.push(ev, &data) {
                     Ok(o) => outs.push(Ok(o)),
                     Err(e) => {
                         outs.push(Err(e));
@@ -259,7 +259,7 @@ mod tests {
             }
         }
         for (ev, data) in super::super::stream::finalize_stream(&mut st) {
-            match d.push(&ev, &data) {
+            match d.push(ev, &data) {
                 Ok(o) => outs.push(Ok(o)),
                 Err(e) => {
                     outs.push(Err(e));
@@ -410,7 +410,7 @@ mod tests {
         let mut d = AnthropicDeframer::new();
         for c in &chunks {
             for (ev, data) in super::super::stream::chunk_to_sse_events(c, "m", &mut st, "msg_1") {
-                d.push(&ev, &data).unwrap();
+                d.push(ev, &data).unwrap();
             }
         }
         // no finalize_stream — the framer would add the missing terminal; the
