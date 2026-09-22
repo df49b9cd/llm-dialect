@@ -15,6 +15,8 @@
 pub mod canonical;
 #[cfg(feature = "client")]
 pub mod client;
+#[cfg(feature = "client-sync")]
+pub mod client_sync;
 pub mod dialect;
 pub mod error;
 pub mod items;
