@@ -5,6 +5,9 @@
 //! a chat `messages` array. Most items map one-to-one onto the canonical
 //! `ContentItem` shape; only message-role wrapping differs.
 
+pub mod deframe;
 pub mod out;
 pub mod req;
+pub mod req_out;
+pub mod resp_in;
 pub mod stream;

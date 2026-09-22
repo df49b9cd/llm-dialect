@@ -127,7 +127,7 @@ pub struct ChatRequest {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     /// Cache-INCLUSIVE prompt count (OpenAI convention): fresh + cached_read +
     /// cache_write. Translators normalize to this at the boundary so

@@ -5,5 +5,7 @@
 //! module folds the side-array back into `ContentItem::ToolCall` on the way
 //! in, and un-folds it on the way out.
 
+pub mod deframe;
 pub mod req;
+pub mod resp_in;
 pub mod stream;

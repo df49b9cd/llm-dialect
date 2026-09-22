@@ -4,6 +4,9 @@
 //! `anthropic_in.rs` module was deleted (its conformance tests live in
 //! `stream.rs` / `out.rs`).
 
+pub mod deframe;
 pub mod out;
 pub mod req;
+pub mod req_out;
+pub mod resp_in;
 pub mod stream;
