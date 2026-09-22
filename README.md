@@ -11,14 +11,16 @@
 [![GitHub stars](https://img.shields.io/github/stars/df49b9cd/llm-dialect.svg)](https://github.com/df49b9cd/llm-dialect/stargazers)
 
 ```toml
-llm-dialect = "0.1.3" # MSRV 1.88
+llm-dialect = "0.1.4" # MSRV 1.88
 ```
 
-Pure sans-I/O LLM dialect translation: Anthropic Messages, OpenAI Chat
-Completions, and OpenAI Responses wire formats ↔ a canonical request/response
-model, plus SSE framer state machines for streamed turns. No async runtime, no
-HTTP client/server types in the API surface, no wall clock, no randomness —
-id minting and timestamps are supplied by the caller.
+Pure sans-I/O LLM dialect translation, both directions: Anthropic Messages,
+OpenAI Chat Completions, and OpenAI Responses wire formats ↔ a canonical
+request/response model — so the same crate parses client-side requests into
+the items model and renders the model back out to any upstream. SSE framers
+and matching deframers bound both directions of a streamed turn. No async
+runtime, no HTTP client/server types in the API surface, no wall clock, no
+randomness — id minting and timestamps are supplied by the caller.
 
 The mapping is the translation core of an LLM gateway (a LiteLLM-proxy-class
 service): parse whatever dialect your client speaks into one `ItemRequest`,
@@ -66,10 +68,12 @@ if you're already an axum service and want drop-in handlers.
 |---|---|
 | `items` | the canonical request model (`ItemRequest`, `Item`, `ContentItem`, …) |
 | `canonical` | the flattened `ChatRequest`/`ChatResponse`/`CanonChunk` the engine speaks |
-| `dialect/{anthropic,openai_chat,openai_responses}` | wire parsers (`*/req.rs`), response renderers (`*/out.rs`), SSE framers (`*/stream.rs`) |
+| `dialect/{anthropic,openai_chat,openai_responses}` | `req.rs`/`req_out.rs` request translate, `out.rs`/`resp_in.rs` response translate, `stream.rs`/`deframe.rs` SSE chunks in both directions |
 | `dialect::deflate` | `ItemRequest` → `ChatRequest` |
 | `dialect::sse` *(feature `axum`)* | the pump that drives a framer over a stream |
-| `error` | the shared `ProxyError` and its HTTP error envelope |
+| `error` | the shared `ProxyError`, plus `error_from_wire` on the client side |
+| `client` *(feature `client`)* | reqwest transport — `sends` + `streams` wire bodies over HTTP |
+| `client_sync` *(feature `client-sync`)* | blocking iterator over the async stream (crossfire at the boundary) |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the module dataflow, the purity
 boundary and how it's enforced, and the cross-dialect invariants (usage
