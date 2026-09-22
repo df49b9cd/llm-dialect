@@ -1,7 +1,7 @@
 [package]
 name = "llm-dialect"
 description = "Pure sans-I/O LLM dialect translation: Anthropic Messages / OpenAI Chat / OpenAI Responses wire formats ↔ a canonical model, plus SSE framer state machines. No runtime, no I/O, no wall clock."
-version = "0.1.1"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.88" # let-chains
 license = "MIT"
@@ -12,6 +12,17 @@ homepage = "https://github.com/df49b9cd/llm-dialect"
 documentation = "https://docs.rs/llm-dialect"
 readme = "README.md"
 publish = true
+# The AVO bench kit (.scripts/, .vocoder/, docs/EVO.md) is repo tooling for the
+# evolution loop, not library material — keep it out of the published crate.
+include = [
+    "src/**/*.rs",
+    "benches/**/*.rs",
+    "tests/**/*.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE-MIT",
+    "ARCHITECTURE.md",
+]
 
 
 [lib]
@@ -56,3 +67,13 @@ harness = false
 name = "client_streams"
 path = "tests/client_streams.rs"
 required-features = ["client", "axum"]
+
+[[bench]]
+name = "req"
+path = "benches/req.rs"
+harness = false
+
+[[bench]]
+name = "deflate"
+path = "benches/deflate.rs"
+harness = false

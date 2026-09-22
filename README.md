@@ -6,12 +6,12 @@
 [![docs.rs](https://docs.rs/llm-dialect/badge.svg)](https://docs.rs/llm-dialect)
 [![rust version](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 [![license](https://img.shields.io/crates/l/llm-dialect.svg)](./LICENSE-MIT)
-[![dependency status](https://deps.rs/crate/llm-dialect/0.1.1/status.svg)](https://deps.rs/crate/llm-dialect/0.1.1)
+[![dependency status](https://deps.rs/crate/llm-dialect/0.1.3/status.svg)](https://deps.rs/crate/llm-dialect/0.1.3)
 [![crates.io downloads](https://img.shields.io/crates/d/llm-dialect.svg)](https://crates.io/crates/llm-dialect)
 [![GitHub stars](https://img.shields.io/github/stars/df49b9cd/llm-dialect.svg)](https://github.com/df49b9cd/llm-dialect/stargazers)
 
 ```toml
-llm-dialect = "0.1.1" # MSRV 1.88
+llm-dialect = "0.1.3" # MSRV 1.88
 ```
 
 Pure sans-I/O LLM dialect translation: Anthropic Messages, OpenAI Chat

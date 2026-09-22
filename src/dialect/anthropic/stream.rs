@@ -9,7 +9,7 @@
 //! driver (`dialect::sse`), and this file's `anthropic_stream_response` is
 //! the thin axum shell wiring state machine to pump.
 
-use crate::canonical::{CanonChunk, Usage};
+use crate::canonical::{CanonChunk, Usage, json_str, write_json_str};
 #[cfg(feature = "axum")]
 use crate::error::ProxyError;
 #[cfg(feature = "axum")]
@@ -182,21 +182,51 @@ impl TerminalUsage {
     }
 }
 
+/// `content_block_delta` frame pair — the hot per-token shape. Hand-assembled
+/// with keys in serde's BTreeMap (alphabetical) order so the framer skips a
+/// `Value`-tree allocation per streamed token; dynamic leaves still escape
+/// through serde, keeping the wire bytes identical to the `json!` original
+/// this replaced.
+fn block_delta(idx: usize, delta_json: String) -> (&'static str, String) {
+    (
+        "content_block_delta",
+        format!("{{\"delta\":{delta_json},\"index\":{idx},\"type\":\"content_block_delta\"}}"),
+    )
+}
+
+/// Text-delta frame pair in one pass: the delta object and its wrapper share
+/// one buffer, the text escaping straight into it (one allocation where the
+/// `block_delta` path above spends three: delta json, wrapper, event name).
+fn text_delta(idx: usize, text: &str) -> (&'static str, String) {
+    let mut data = String::with_capacity(64 + text.len());
+    data.push_str("{\"delta\":{\"text\":");
+    write_json_str(&mut data, text);
+    data.push_str(",\"type\":\"text_delta\"},\"index\":");
+    data.push_str(&idx.to_string());
+    data.push_str(",\"type\":\"content_block_delta\"}");
+    ("content_block_delta", data)
+}
+
+/// `content_block_stop` frame pair (same hand-assembly rationale).
+fn block_stop(idx: usize) -> (&'static str, String) {
+    (
+        "content_block_stop",
+        format!("{{\"index\":{idx},\"type\":\"content_block_stop\"}}"),
+    )
+}
+
 fn open_block(
-    out: &mut Vec<(String, String)>,
+    out: &mut Vec<(&'static str, String)>,
     state: &mut StreamState,
     idx: usize,
-    block: serde_json::Value,
+    block: &str,
 ) {
     flush_stop_tail(out, state);
     // close everything below idx that is still open — SSE blocks are sequential
     for i in 0..idx {
         if i < state.blocks.len() && state.blocks[i] {
             state.blocks[i] = false;
-            out.push((
-                "content_block_stop".into(),
-                serde_json::json!({"type": "content_block_stop", "index": i}).to_string(),
-            ));
+            out.push(block_stop(i));
         }
     }
     if state.blocks.len() <= idx {
@@ -204,50 +234,39 @@ fn open_block(
     }
     state.blocks[idx] = true;
     out.push((
-        "content_block_start".into(),
-        serde_json::json!({
-            "type": "content_block_start",
-            "index": idx,
-            "content_block": block,
-        })
-        .to_string(),
+        "content_block_start",
+        format!("{{\"content_block\":{block},\"index\":{idx},\"type\":\"content_block_start\"}}"),
     ));
 }
 
 /// Emit any text withheld by the stop window into its own block, before that
 /// block is closed. No-op on the common (no stop sequences) path.
-fn flush_stop_tail(out: &mut Vec<(String, String)>, state: &mut StreamState) {
+fn flush_stop_tail(out: &mut Vec<(&'static str, String)>, state: &mut StreamState) {
     let Some((idx, kind, text)) = state.stop_window.as_mut().and_then(StopWindow::take_tail) else {
         return;
     };
     if state.blocks.get(idx) != Some(&true) {
         return;
     }
-    let delta = if kind == "thinking" {
-        serde_json::json!({"type": "thinking_delta", "thinking": text})
+    let mut delta = String::with_capacity(48 + text.len());
+    if kind == "thinking" {
+        delta.push_str("{\"thinking\":");
+        write_json_str(&mut delta, &text);
+        delta.push_str(",\"type\":\"thinking_delta\"}");
     } else {
-        serde_json::json!({"type": "text_delta", "text": text})
-    };
-    out.push((
-        "content_block_delta".into(),
-        serde_json::json!({
-            "type": "content_block_delta",
-            "index": idx,
-            "delta": delta,
-        })
-        .to_string(),
-    ));
+        delta.push_str("{\"text\":");
+        write_json_str(&mut delta, &text);
+        delta.push_str(",\"type\":\"text_delta\"}");
+    }
+    out.push(block_delta(idx, delta));
 }
 
-fn close_block(out: &mut Vec<(String, String)>, state: &mut StreamState, upto: usize) {
+fn close_block(out: &mut Vec<(&'static str, String)>, state: &mut StreamState, upto: usize) {
     flush_stop_tail(out, state);
     for (i, open) in state.blocks.iter_mut().enumerate().take(upto) {
         if *open {
             *open = false;
-            out.push((
-                "content_block_stop".into(),
-                serde_json::json!({"type": "content_block_stop", "index": i}).to_string(),
-            ));
+            out.push(block_stop(i));
         }
     }
 }
@@ -262,30 +281,37 @@ fn next_index(state: &StreamState) -> usize {
 /// whenever known — for non-Anthropic upstreams the prompt count only ever
 /// arrives in the trailer, and this frame is the sole place it can surface.
 /// Cache counters ride along when present (clients bill on them).
-fn terminal_usage(
+fn write_terminal_usage(
+    buf: &mut String,
     input: u64,
     output: u64,
     cached_read: u64,
     cache_write: u64,
-) -> serde_json::Value {
-    let mut u = serde_json::json!({
-        "input_tokens": input,
-        "output_tokens": output,
-    });
-    if cached_read > 0 {
-        u["cache_read_input_tokens"] = serde_json::json!(cached_read);
-    }
+) {
+    // keys in serde's alphabetical order: cache_creation < cache_read < input < output
+    buf.push('{');
     if cache_write > 0 {
-        u["cache_creation_input_tokens"] = serde_json::json!(cache_write);
+        buf.push_str("\"cache_creation_input_tokens\":");
+        buf.push_str(&cache_write.to_string());
+        buf.push(',');
     }
-    u
+    if cached_read > 0 {
+        buf.push_str("\"cache_read_input_tokens\":");
+        buf.push_str(&cached_read.to_string());
+        buf.push(',');
+    }
+    buf.push_str("\"input_tokens\":");
+    buf.push_str(&input.to_string());
+    buf.push_str(",\"output_tokens\":");
+    buf.push_str(&output.to_string());
+    buf.push('}');
 }
 
 /// Terminal `message_delta` + `message_stop` carrying a mapped stop reason
 /// and usage. Shared by the trailer, finish, and finalizer paths so the
 /// exactly-one-terminal-frame invariant lives in one place.
 fn emit_terminal(
-    out: &mut Vec<(String, String)>,
+    out: &mut Vec<(&'static str, String)>,
     state: &mut StreamState,
     stop_reason: String,
     usage: TerminalUsage,
@@ -296,26 +322,29 @@ fn emit_terminal(
     // OpenAI-dialect backends report it as a plain "stop", indistinguishable
     // from running out of things to say.
     let matched = state.stop_window.as_ref().and_then(|w| w.matched.clone());
-    let (stop_reason, stop_sequence) = match matched {
-        Some(s) => ("stop_sequence".to_string(), serde_json::json!(s)),
-        None => (stop_reason, serde_json::Value::Null),
-    };
-    out.push((
-        "message_delta".into(),
-        serde_json::json!({
-            "type": "message_delta",
-            "delta": {
-                "stop_reason": stop_reason,
-                "stop_sequence": stop_sequence,
-            },
-            "usage": terminal_usage(prompt, usage.output, usage.cached_read, usage.cache_write),
-        })
-        .to_string(),
-    ));
-    out.push((
-        "message_stop".into(),
-        serde_json::json!({"type": "message_stop"}).to_string(),
-    ));
+    let mut data = String::with_capacity(112);
+    data.push_str("{\"delta\":{\"stop_reason\":");
+    match &matched {
+        Some(s) => {
+            data.push_str("\"stop_sequence\",\"stop_sequence\":");
+            write_json_str(&mut data, s);
+        }
+        None => {
+            write_json_str(&mut data, &stop_reason);
+            data.push_str(",\"stop_sequence\":null");
+        }
+    }
+    data.push_str("},\"type\":\"message_delta\",\"usage\":");
+    write_terminal_usage(
+        &mut data,
+        prompt,
+        usage.output,
+        usage.cached_read,
+        usage.cache_write,
+    );
+    data.push('}');
+    out.push(("message_delta", data));
+    out.push(("message_stop", "{\"type\":\"message_stop\"}".to_string()));
     state.message_stopped = true;
 }
 
@@ -330,7 +359,7 @@ pub fn chunk_to_sse_events(
     model: &str,
     state: &mut StreamState,
     msg_id: &str,
-) -> Vec<(String, String)> {
+) -> Vec<(&'static str, String)> {
     if state.message_stopped {
         return Vec::new();
     }
@@ -346,23 +375,15 @@ pub fn chunk_to_sse_events(
 
     if state.first {
         state.first = false;
-        out.push((
-            "message_start".into(),
-            serde_json::json!({
-                "type": "message_start",
-                "message": {
-                    "id": msg_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "model": model,
-                    "content": [],
-                    "stop_reason": null,
-                    "stop_sequence": null,
-                    "usage": {"input_tokens": state.input_tokens, "output_tokens": 0},
-                }
-            })
-            .to_string(),
-        ));
+        let mut data = String::with_capacity(208 + msg_id.len() + model.len());
+        data.push_str("{\"message\":{\"content\":[],\"id\":");
+        write_json_str(&mut data, msg_id);
+        data.push_str(",\"model\":");
+        write_json_str(&mut data, model);
+        data.push_str(",\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"input_tokens\":");
+        data.push_str(&state.input_tokens.to_string());
+        data.push_str(",\"output_tokens\":0}},\"type\":\"message_start\"}");
+        out.push(("message_start", data));
     }
 
     // Usage-only trailer chunk (no content of any kind — the gemini shape
@@ -408,7 +429,7 @@ pub fn chunk_to_sse_events(
                     &mut out,
                     state,
                     i,
-                    serde_json::json!({"type": "thinking", "thinking": ""}),
+                    "{\"thinking\":\"\",\"type\":\"thinking\"}",
                 );
                 i
             }
@@ -416,29 +437,30 @@ pub fn chunk_to_sse_events(
         // Reasoning models apply stop sequences to the thinking channel too,
         // so it is filtered exactly like visible text. Signatures are opaque
         // and never scanned.
-        let delta_obj = match th.kind {
-            "signature" => {
-                Some(serde_json::json!({"type": "signature_delta", "signature": th.text}))
-            }
+        let text = match th.kind {
+            // borrow reuse: the delta feeds the frame builder straight from
+            // the chunk / stop window — no intermediate delta json String
+            "signature" => Some(std::borrow::Cow::Borrowed(&th.text)),
             _ => match state.stop_window.as_mut() {
-                Some(w) => {
-                    let emit = w.feed(idx, "thinking", &th.text);
-                    (!emit.is_empty())
-                        .then(|| serde_json::json!({"type": "thinking_delta", "thinking": emit}))
-                }
-                None => Some(serde_json::json!({"type": "thinking_delta", "thinking": th.text})),
+                Some(w) => match w.feed(idx, "thinking", &th.text) {
+                    s if s.is_empty() => None,
+                    s => Some(std::borrow::Cow::Owned(s)),
+                },
+                None => Some(std::borrow::Cow::Borrowed(&th.text)),
             },
         };
-        if let Some(delta_obj) = delta_obj {
-            out.push((
-                "content_block_delta".into(),
-                serde_json::json!({
-                    "type": "content_block_delta",
-                    "index": idx,
-                    "delta": delta_obj,
-                })
-                .to_string(),
-            ));
+        if let Some(text) = text {
+            let mut delta = String::with_capacity(48 + text.len());
+            if th.kind == "signature" {
+                delta.push_str("{\"signature\":");
+                write_json_str(&mut delta, &text);
+                delta.push_str(",\"type\":\"signature_delta\"}");
+            } else {
+                delta.push_str("{\"thinking\":");
+                write_json_str(&mut delta, &text);
+                delta.push_str(",\"type\":\"thinking_delta\"}");
+            }
+            out.push(block_delta(idx, delta));
         }
     }
     if !chunk.delta_text.is_empty() {
@@ -449,29 +471,26 @@ pub fn chunk_to_sse_events(
             _ => {
                 let i = next_index(state);
                 state.text_index = Some(i);
-                open_block(
-                    &mut out,
-                    state,
-                    i,
-                    serde_json::json!({"type": "text", "text": ""}),
-                );
+                open_block(&mut out, state, i, "{\"text\":\"\",\"type\":\"text\"}");
                 i
             }
         };
-        let emit = match state.stop_window.as_mut() {
-            Some(w) => w.feed(idx, "text", &chunk.delta_text),
-            None => chunk.delta_text.clone(),
-        };
-        if !emit.is_empty() {
-            out.push((
-                "content_block_delta".into(),
-                serde_json::json!({
-                    "type": "content_block_delta",
-                    "index": idx,
-                    "delta": {"type": "text_delta", "text": emit},
-                })
-                .to_string(),
-            ));
+        if state.stop_window.is_some() {
+            let emit = state
+                .stop_window
+                .as_mut()
+                .map(|w| w.feed(idx, "text", &chunk.delta_text))
+                .unwrap_or_default();
+            if !emit.is_empty() {
+                out.push(block_delta(
+                    idx,
+                    format!("{{\"text\":{},\"type\":\"text_delta\"}}", json_str(&emit)),
+                ));
+            }
+        } else if !chunk.delta_text.is_empty() {
+            // common path: no stop window — frame straight from the chunk's
+            // own text, no clone (borrow reuse)
+            out.push(text_delta(idx, &chunk.delta_text));
         }
     }
     // Tool-call deltas: canonical streams them OpenAI-style. Each upstream
@@ -493,12 +512,13 @@ pub fn chunk_to_sse_events(
                     msg_id,
                     tc["index"].as_u64().unwrap_or(0) as usize,
                 );
-                open_block(
-                    &mut out,
-                    state,
-                    idx,
-                    serde_json::json!({"type": "tool_use", "id": id, "name": name, "input": {}}),
-                );
+                let mut block = String::with_capacity(48 + id.len() + name.len());
+                block.push_str("{\"id\":");
+                write_json_str(&mut block, &id);
+                block.push_str(",\"input\":{},\"name\":");
+                write_json_str(&mut block, name);
+                block.push_str(",\"type\":\"tool_use\"}");
+                open_block(&mut out, state, idx, &block);
             }
             if let Some(args) = tc["function"]["arguments"].as_str()
                 && !args.is_empty()
@@ -514,15 +534,11 @@ pub fn chunk_to_sse_events(
                     );
                     continue;
                 }
-                out.push((
-                    "content_block_delta".into(),
-                    serde_json::json!({
-                        "type": "content_block_delta",
-                        "index": idx,
-                        "delta": {"type": "input_json_delta", "partial_json": args},
-                    })
-                    .to_string(),
-                ));
+                let mut delta = String::with_capacity(48 + args.len());
+                delta.push_str("{\"partial_json\":");
+                write_json_str(&mut delta, args);
+                delta.push_str(",\"type\":\"input_json_delta\"}");
+                out.push(block_delta(idx, delta));
             }
         }
     }
@@ -593,7 +609,7 @@ pub(super) fn map_stop_reason_outbound(fr: &str) -> &str {
 /// Terminal frames for a stream that ended without a finish chunk (provider
 /// truncated, client-visible end closer). Mirrors the OpenAI surface's
 /// guaranteed `[DONE]`. No-op when the message already stopped.
-pub fn finalize_stream(state: &mut StreamState) -> Vec<(String, String)> {
+pub fn finalize_stream(state: &mut StreamState) -> Vec<(&'static str, String)> {
     if state.message_stopped {
         return Vec::new();
     }
@@ -798,7 +814,7 @@ mod tests {
 
     /// Run typed canonical chunks through the framer, return all frame pairs
     /// including the finalizer's.
-    fn frames(chunks: Vec<CanonChunk>) -> Vec<(String, String)> {
+    fn frames(chunks: Vec<CanonChunk>) -> Vec<(&'static str, String)> {
         let mut st = StreamState::new();
         let mut all = Vec::new();
         for c in &chunks {
@@ -808,18 +824,18 @@ mod tests {
         all
     }
 
-    fn types(all: &[(String, String)]) -> Vec<&str> {
-        all.iter().map(|(e, _)| e.as_str()).collect()
+    fn types(all: &[(&'static str, String)]) -> Vec<&'static str> {
+        all.iter().map(|(e, _)| *e).collect()
     }
 
-    fn data_of<'a>(all: &'a [(String, String)], ev: &str) -> Vec<&'a str> {
+    fn data_of<'a>(all: &'a [(&'static str, String)], ev: &'static str) -> Vec<&'a str> {
         all.iter()
-            .filter(|(e, _)| e == ev)
+            .filter(|(e, _)| *e == ev)
             .map(|(_, d)| d.as_str())
             .collect()
     }
 
-    fn starts_indices(all: &[(String, String)]) -> Vec<i64> {
+    fn starts_indices(all: &[(&'static str, String)]) -> Vec<i64> {
         data_of(all, "content_block_start")
             .iter()
             .filter_map(|d| serde_json::from_str::<serde_json::Value>(d).unwrap()["index"].as_i64())
@@ -831,9 +847,9 @@ mod tests {
         let mut st = StreamState::new();
         let evs = chunk_to_sse_events(&text("Hi"), "translate-model", &mut st, "msg_1");
         assert_eq!(evs[0].0, "message_start");
-        assert!(evs.iter().any(|(t, _)| t == "content_block_delta"));
+        assert!(evs.iter().any(|(t, _)| *t == "content_block_delta"));
         assert!(
-            !evs.iter().any(|(t, _)| t == "ping"),
+            !evs.iter().any(|(t, _)| *t == "ping"),
             "ping is one-shot preamble noise; real Anthropic streams ping periodically, not here"
         );
 
@@ -971,7 +987,7 @@ mod tests {
         for (ev, d) in &all {
             let v: serde_json::Value = serde_json::from_str(d).unwrap();
             let idx = v["index"].as_i64();
-            match ev.as_str() {
+            match *ev {
                 "content_block_start" => {
                     if let Some(i) = idx {
                         assert!(seen_started.insert(i), "block {i} started twice");
@@ -1056,7 +1072,7 @@ mod tests {
         // chunk with no finish is a trailer, not a terminator, unless a finish
         // chunk already stashed a stop reason.
         let mut st = StreamState::new();
-        let mut all: Vec<(String, String)> = Vec::new();
+        let mut all: Vec<(&'static str, String)> = Vec::new();
         for _ in 0..2 {
             all.extend(chunk_to_sse_events(
                 &CanonChunk {
@@ -1114,7 +1130,7 @@ mod tests {
         ));
         let md = serde_json::from_str::<serde_json::Value>(
             evs.iter()
-                .find(|(e, _)| e == "message_delta")
+                .find(|(e, _)| *e == "message_delta")
                 .map(|(_, d)| d.as_str())
                 .unwrap(),
         )
@@ -1245,7 +1261,7 @@ mod tests {
                 ..text("")
             },
         ];
-        let mut all: Vec<(String, String)> = Vec::new();
+        let mut all: Vec<(&'static str, String)> = Vec::new();
         for c in chunks {
             all.extend(chunk_to_sse_events(&c, "m", &mut st, "msg_1"));
         }
@@ -1355,7 +1371,7 @@ mod tests {
         assert_eq!(data_of(&all, "message_stop").len(), 1);
     }
 
-    fn show(all: &[(String, String)]) -> String {
+    fn show(all: &[(&'static str, String)]) -> String {
         all.iter()
             .map(|(e, d)| format!("event: {e}\ndata: {d}"))
             .collect::<Vec<_>>()

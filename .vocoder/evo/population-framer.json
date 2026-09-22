@@ -1,0 +1,118 @@
+{
+  "schema": "avo-population/v1",
+  "lineage": "framer \u2014 SSE framer hot path (benches/framer.rs: anthropic_turn_full, anthropic_text_delta, openai_chat_to_sse_json, openai_chat_tool_delta + canary_empty_chunk_skip)",
+  "scoring": {
+    "version": 2,
+    "gate": "cargo build --workspace + cargo nextest run --workspace + cargo clippy --workspace --all-targets -- -D warnings",
+    "f": "bench_geomean_ns (perf scope, drive down); per-bench metrics + canary_empty_chunk_skip veto ride alongside"
+  },
+  "x0": {
+    "name": "x0",
+    "commit": "0e8c44f",
+    "phase": "baseline",
+    "scores": {
+      "bench_geomean_ns": 104708.463,
+      "framer/anthropic_text_delta": 63002.085,
+      "framer/anthropic_turn_full": 89404.824,
+      "framer/openai_chat_to_sse_json": 103474.684,
+      "framer/openai_chat_tool_delta": 206242.023,
+      "canary_empty_chunk_skip_ns": 5.844,
+      "test_count": 82
+    },
+    "gate": "pass (82 tests, clippy 0)",
+    "note": "baseline @ 0e8c44f on 32-core Linux, rustc 1.98.0; cargo bench then evo-score.sh"
+  },
+  "committed": [
+    {
+      "name": "x1",
+      "commit": "dc9da26",
+      "phase": "perf",
+      "scores": {
+        "bench_geomean_ns": 26914.23,
+        "framer/anthropic_text_delta": 15235.241,
+        "framer/anthropic_turn_full": 22716.173,
+        "framer/openai_chat_to_sse_json": 21076.825,
+        "framer/openai_chat_tool_delta": 71934.652,
+        "canary_empty_chunk_skip_ns": 5.779,
+        "test_count": 82
+      },
+      "gate": "pass (82 tests, clippy 0)",
+      "note": "round r1-framer \u00b7 hand-assembled SSE frames (alloc elision): json! Value trees -> format! strings, byte-identical wire (verified vs frame dump)",
+      "noise_band": 6.33,
+      "scorer_sha": ""
+    },
+    {
+      "name": "x2",
+      "commit": "9ff4065",
+      "phase": "perf",
+      "scores": {
+        "bench_geomean_ns": 24606.844,
+        "framer/anthropic_text_delta": 14773.883,
+        "framer/anthropic_turn_full": 22461.143,
+        "framer/openai_chat_to_sse_json": 18920.192,
+        "framer/openai_chat_tool_delta": 58394.459,
+        "canary_empty_chunk_skip_ns": 5.951,
+        "test_count": 82
+      },
+      "gate": "pass (82 tests, clippy 0)",
+      "note": "round r3-framer \u00b7 one-buffer frame assembly + split early-out prologue (r2's single-body version was rejected by the canary veto: empty-chunk early-out +4.34% beyond band)",
+      "noise_band": 6.33,
+      "scorer_sha": ""
+    },
+    {
+      "name": "x3",
+      "commit": "0e2c9ec",
+      "phase": "perf",
+      "scores": {
+        "bench_geomean_ns": 23464.248,
+        "framer/anthropic_text_delta": 13687.293,
+        "framer/anthropic_turn_full": 18936.77,
+        "framer/openai_chat_to_sse_json": 19826.298,
+        "framer/openai_chat_tool_delta": 58987.705,
+        "canary_empty_chunk_skip_ns": 5.751,
+        "test_count": 82
+      },
+      "gate": "pass (82 tests, clippy 0)",
+      "note": "round r4-framer \u00b7 static event names Vec<(&'static str, String)> \u2014 one less heap String per frame; turn_full -15.7%, text_delta -7.4%. (Mutations landed in main tree by mistake; evidence gathered on that state, see commit note.)",
+      "noise_band": 6.33,
+      "scorer_sha": ""
+    },
+    {
+      "name": "x4",
+      "commit": "b350586",
+      "phase": "rebaseline",
+      "rebaseline": true,
+      "scores": {
+        "bench_geomean_ns": 23355.595,
+        "framer/anthropic_text_delta": 13206.647,
+        "framer/anthropic_turn_full": 18728.023,
+        "framer/openai_chat_to_sse_json": 19700.987,
+        "framer/openai_chat_tool_delta": 61064.846,
+        "canary_empty_chunk_skip_ns": 3174.802,
+        "test_count": 82
+      },
+      "gate": "pass (82 tests, clippy 0)",
+      "note": "scoring v2: canary_empty_chunk_skip loops 1000 empty-chunk calls per iteration \u2014 the single-call shape was smaller than cross-build layout jitter (~\u00b14%) and vetoed two improving candidates (r2 +4.34%, r5 +4.21%) at its +/-3% band edge. Scores re-established below under the new canary shape; versions before this row are never compared against later ones.",
+      "noise_band": 0.0,
+      "scorer_sha": ""
+    },
+    {
+      "name": "x5",
+      "commit": "4428842",
+      "phase": "perf",
+      "scores": {
+        "bench_geomean_ns": 20561.809,
+        "framer/anthropic_text_delta": 13022.028,
+        "framer/anthropic_turn_full": 18481.955,
+        "framer/openai_chat_to_sse_json": 13820.325,
+        "framer/openai_chat_tool_delta": 53740.348,
+        "canary_empty_chunk_skip_ns": 3198.818,
+        "test_count": 82
+      },
+      "gate": "pass (82 tests, clippy 0)",
+      "note": "round r6-framer \u00b7 r5 re-landed under scoring v2: one-buffer assembly completion + escape-scan fast path; canary holds within amortized band (+0.76%)",
+      "noise_band": 13.61,
+      "scorer_sha": ""
+    }
+  ]
+}
